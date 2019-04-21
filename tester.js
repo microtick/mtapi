@@ -35,8 +35,9 @@ async function main() {
   await api.createAccount(keys)
   const info = await api.getAccountInfo(keys.acct)
   console.log(info)
-  const market = "abcd1236"
+  const market = "ETH"
   await api.createMarket(market)
+  await api.createQuote(market, "5minute", "10fox", "170spot", "1.2premium")
   console.log("Market Info: " + JSON.stringify(await api.getMarketInfo(market)))
   console.log("Orderbook Info: " + JSON.stringify(await api.getOrderbookInfo(market, "5minute")))
   console.log("Consensus: " + JSON.stringify(await api.getMarketSpot(market)))

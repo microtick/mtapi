@@ -15,7 +15,7 @@ class API {
       console.log("Cosmos query: " + query)
       return await axios.get(query)
     } catch (err) {
-      throw new Error("Cosmos query failed")
+      throw new Error("Cosmos query failed: " + err.message)
       console.log(err.stack)
     }
   }
@@ -77,11 +77,24 @@ class API {
   
   async getAccountInfo(acct) {
     const res = await this.cosmosQuery("/microtick/account/" + acct)
-    return res
+    return res.data
   }
   
   async createMarket(market) {
     let msg = await this.cosmosQuery('/microtick/createmarket/' + this.wallet.cosmosAddress + "/" + market)
+    const unsigned = msg.data.tx
+    const signed = wallet.sign(unsigned, this.wallet, {
+      sequence: msg.data.sequence,
+      account_number: msg.data.accountNumber,
+      chain_id: msg.data.chainId
+    })
+    console.log(JSON.stringify(signed))
+    await this.cosmosPostTx(signed)
+  }
+  
+  async createQuote(market, dur, backing, spot, premium) {
+    let msg = await this.cosmosQuery('/microtick/createquote/' + this.wallet.cosmosAddress + "/" + market +
+      "/" + dur + "/" + backing + "/" + spot + "/" + premium)
     const unsigned = msg.data.tx
     const signed = wallet.sign(unsigned, this.wallet, {
       sequence: msg.data.sequence,
