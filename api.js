@@ -7,28 +7,38 @@ class API {
     this.tm = tendermint
     this.cosmos = cosmos
     this.faucet = faucet
-  }
-  
-  async cosmosQuery(url) {
-    try {
-      const query = this.cosmos + url
-      console.log("Cosmos query: " + query)
-      return await axios.get(query)
-    } catch (err) {
-      throw new Error("Cosmos query failed: " + err.message)
-      console.log(err.stack)
+    
+    this.cosmosQuery = async function(url) {
+      try {
+        const query = this.cosmos + url
+        console.log("Cosmos query: " + query)
+        const res = await axios.get(query)
+        return res.data
+      } catch (err) {
+        throw new Error("Cosmos query failed: " + err.response.data.message)
+      }
     }
-  }
-  
-  async cosmosPostTx(tx) {
-    try {
-      return await axios.post(this.cosmos + "/microtick/broadcast", {
-        tx: JSON.stringify(tx)
-      })
-    } catch (err) {
-      throw new Error("Cosmos post failed")
-      console.log(err.stack)
+    
+    this.cosmosPostTx = async function(msg) {
+      //console.log("cosmosPostTx: " + JSON.stringify(msg, null, 2))
+      try {
+        const signed = wallet.sign(msg.tx, this.wallet, {
+          sequence: msg.sequence,
+          account_number: msg.accountNumber,
+          chain_id: msg.chainId
+        })
+        //console.log(JSON.stringify(signed))
+        const res = await axios.post(this.cosmos + "/microtick/broadcast", {
+          tx: JSON.stringify(signed)
+        })
+        return res.data
+      } catch (err) {
+        //console.log("cosmosPostTx: " + JSON.stringify(msg, null, 2))
+        console.log(err.response.data.message)
+        throw new Error("Cosmos post failed")
+      }
     }
+    
   }
   
   async blockInfo() {
@@ -77,47 +87,92 @@ class API {
   
   async getAccountInfo(acct) {
     const res = await this.cosmosQuery("/microtick/account/" + acct)
-    return res.data
+    return res
   }
   
   async createMarket(market) {
-    let msg = await this.cosmosQuery('/microtick/createmarket/' + this.wallet.cosmosAddress + "/" + market)
-    const unsigned = msg.data.tx
-    const signed = wallet.sign(unsigned, this.wallet, {
-      sequence: msg.data.sequence,
-      account_number: msg.data.accountNumber,
-      chain_id: msg.data.chainId
-    })
-    console.log(JSON.stringify(signed))
-    await this.cosmosPostTx(signed)
+    const url = "/microtick/createmarket/" + this.wallet.cosmosAddress + "/" + market
+    const msg = await this.cosmosQuery(url)
+    await this.cosmosPostTx(msg)
   }
   
   async createQuote(market, dur, backing, spot, premium) {
-    let msg = await this.cosmosQuery('/microtick/createquote/' + this.wallet.cosmosAddress + "/" + market +
-      "/" + dur + "/" + backing + "/" + spot + "/" + premium)
-    const unsigned = msg.data.tx
-    const signed = wallet.sign(unsigned, this.wallet, {
-      sequence: msg.data.sequence,
-      account_number: msg.data.accountNumber,
-      chain_id: msg.data.chainId
-    })
-    console.log(JSON.stringify(signed))
-    await this.cosmosPostTx(signed)
+    const url = "/microtick/createquote/" + this.wallet.cosmosAddress + "/" + market +
+      "/" + dur + "/" + backing + "/" + spot + "/" + premium
+    const msg = await this.cosmosQuery(url)
+    const res = await this.cosmosPostTx(msg)
+    const id = res.tags.reduce((acc, t) => {
+      if (t.key === 'id') {
+        return t.value
+      }
+      return acc
+    }, null)
+    return id
+  }
+  
+  async cancelQuote(id) {
+    const url = "/microtick/cancelquote/" + this.wallet.cosmosAddress + "/" + id
+    const msg = await this.cosmosQuery(url)
+    await this.cosmosPostTx(msg)
+  }
+  
+  async depositQuote(id, amount) {
+    const url = "/microtick/depositquote/" + this.wallet.cosmosAddress + "/" + id + "/" + amount
+    const msg = await this.cosmosQuery(url)
+    await this.cosmosPostTx(msg)
+  }
+  
+  async updateQuote(id, spot, premium) {
+    const url = "/microtick/updatequote/" + this.wallet.cosmosAddress + "/" + id + "/" + spot + "/" + premium
+    const msg = await this.cosmosQuery(url)
+    await this.cosmosPostTx(msg)
+  }
+  
+  async marketTrade(market, duration, tradetype, quantity) {
+    const url = "/microtick/markettrade/" + this.wallet.cosmosAddress + "/" + market + "/" + duration + "/" + tradetype + "/" + quantity
+    const msg = await this.cosmosQuery(url)
+    const res = await this.cosmosPostTx(msg)
+    const id = res.tags.reduce((acc, t) => {
+      if (t.key === 'id') {
+        return t.value
+      }
+      return acc
+    }, null)
+    return id
+  }
+  
+  async limitTrade(market, duration, tradetype, maxpremium) {
+    const url = "/microtick/limittrade/" + this.wallet.cosmosAddress + "/" + market + "/" + duration + "/" + tradetype + "/" + maxpremium
+    const msg = await this.cosmosQuery(url)
+    const res = await this.cosmosPostTx(msg)
+    const id = res.tags.reduce((acc, t) => {
+      if (t.key === 'id') {
+        return t.value
+      }
+      return acc
+    }, null)
+    return id
+  }
+  
+  async settleTrade(id) {
+    const url = "/microtick/settletrade/" + this.wallet.cosmosAddress + "/" + id
+    const msg = await this.cosmosQuery(url)
+    await this.cosmosPostTx(msg)
   }
   
   async getMarketInfo(market) {
     const res = await this.cosmosQuery("/microtick/market/" + market)
-    return res.data
+    return res
   }
   
   async getOrderbookInfo(market, dur) {
     const res = await this.cosmosQuery("/microtick/orderbook/" + market + "/" + dur)
-    return res.data
+    return res
   }
   
   async getMarketSpot(market) {
     const res = await this.cosmosQuery("/microtick/consensus/" + market)
-    return res.data
+    return res
   }
   
 }

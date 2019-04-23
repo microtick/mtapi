@@ -37,10 +37,12 @@ async function main() {
   console.log(info)
   const market = "ETH"
   await api.createMarket(market)
-  await api.createQuote(market, "5minute", "10fox", "170spot", "1.2premium")
-  console.log("Market Info: " + JSON.stringify(await api.getMarketInfo(market)))
-  console.log("Orderbook Info: " + JSON.stringify(await api.getOrderbookInfo(market, "5minute")))
-  console.log("Consensus: " + JSON.stringify(await api.getMarketSpot(market)))
+  const id = await api.createQuote(market, "5minute", "1fox", "171spot", "1.2premium")
+  console.log("created quote id: " + id)
+  //console.log("Market Info: " + JSON.stringify(await api.getMarketInfo(market)))
+  //console.log("Orderbook Info: " + JSON.stringify(await api.getOrderbookInfo(market, "5minute")))
+  //console.log("Consensus: " + JSON.stringify(await api.getMarketSpot(market)))
+  //await api.depositQuote(1, "57fox")
 }
 
 main()
