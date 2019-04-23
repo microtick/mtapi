@@ -102,7 +102,7 @@ class API {
     const msg = await this.cosmosQuery(url)
     const res = await this.cosmosPostTx(msg)
     const id = res.tags.reduce((acc, t) => {
-      if (t.key === 'id') {
+      if (t.key === 'mtm.NewQuote') {
         return t.value
       }
       return acc
@@ -133,7 +133,7 @@ class API {
     const msg = await this.cosmosQuery(url)
     const res = await this.cosmosPostTx(msg)
     const id = res.tags.reduce((acc, t) => {
-      if (t.key === 'id') {
+      if (t.key === 'mtm.NewTrade') {
         return t.value
       }
       return acc
@@ -146,7 +146,7 @@ class API {
     const msg = await this.cosmosQuery(url)
     const res = await this.cosmosPostTx(msg)
     const id = res.tags.reduce((acc, t) => {
-      if (t.key === 'id') {
+      if (t.key === 'mtm.NewTrade') {
         return t.value
       }
       return acc
