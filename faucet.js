@@ -1,7 +1,10 @@
 const express = require('express')
+const cors = require('cors')
 const { exec } = require('child_process')
 
 const app = express()
+
+app.use(cors())
 
 app.get('/:address', (req, res) => {
     const addr = req.params.address

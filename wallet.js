@@ -149,10 +149,20 @@ function createSignature(signature, publicKey) {
 // main function to sign a jsonTx using the local keystore wallet
 // returns the complete signature object to add to the tx
 function sign(jsonTx, wallet, requestMetaData) {
-  const signMessage = createSignMessage(jsonTx, requestMetaData.sequence,
+  const now = Date.now()
+  var sequence = parseInt(requestMetaData.sequence, 10)
+  if (now < wallet.lastSequenceTime + 1000) {
+    //console.log("incrementing " + sequence + " to " + (wallet.lastSequence+1))
+    if (sequence <= wallet.lastSequence) sequence = wallet.lastSequence + 1
+  }
+  //console.log("signing with: " + sequence)
+  //console.log("TX=" + JSON.stringify(jsonTx))
+  const signMessage = createSignMessage(jsonTx, '' + sequence,
     requestMetaData.account_number, requestMetaData.chain_id)
   const signatureBuffer = signWithPrivateKey(signMessage, wallet.privateKey)
   const pubKeyBuffer = Buffer.from(wallet.publicKey, `hex`)
+  wallet.lastSequence = sequence
+  wallet.lastSequenceTime = now
   return createSignature(
     signatureBuffer,
     pubKeyBuffer
