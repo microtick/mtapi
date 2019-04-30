@@ -177,16 +177,17 @@ class API {
           }
           
           obj.client.onclose = function() {
+            const oldClient = obj.client
             if (Object.keys(obj.subscriptions).length > 0) {
-              //console.log("Reopening websocket...")
+              console.log("Reopening websocket...")
               setTimeout(() => {
-                obj.client = new WebSocketClient(this.ws)
-                obj.client.onerror = this.onerror
-                obj.client.onclose = this.onclose
-                obj.client.onmessage = this.onmessage
+                obj.client = new WebSocketClient(obj.ws)
+                obj.client.onerror = oldClient.onerror
+                obj.client.onclose = oldClient.onclose
+                obj.client.onmessage = oldClient.onmessage
                 obj.client.onopen = function() {
                   Object.keys(obj.subscriptions).map(key => {
-                    //console.log("Resubscribing: " + key)
+                    console.log("Resubscribing: " + key)
                     const req = {
                       "jsonrpc": "2.0",
                       "method": "subscribe",
@@ -485,22 +486,23 @@ class API {
         for (var i=0; i<txs.length; i++) {
           const tx = txs[i] 
           const height = parseInt(tx.height, 10)
-            var data = {}
-            data.tags = []
-            if (tx.tx_result.data !== undefined) {
-              data = Object.assign(data, JSON.parse(Buffer.from(tx.tx_result.data, "base64")))
-            }
-            if (tx.tx_result.tags !== undefined) {
-              tx.tx_result.tags.map(tag => {
-                data.tags.push({
-                  key: Buffer.from(tag.key, "base64").toString(),
-                  value: Buffer.from(tag.value, "base64").toString()
-                })
+          
+          var data = {}
+          data.tags = []
+          if (tx.tx_result.data !== undefined) {
+            data = Object.assign(data, JSON.parse(Buffer.from(tx.tx_result.data, "base64")))
+          }
+          if (tx.tx_result.tags !== undefined) {
+            tx.tx_result.tags.map(tag => {
+              data.tags.push({
+                key: Buffer.from(tag.key, "base64").toString(),
+                value: Buffer.from(tag.value, "base64").toString()
               })
-            }
-            data.block = height
-            data.index = count++
-            history.push(data)
+            })
+          }
+          data.block = height
+          data.index = count++
+          history.push(data)
         } 
         
       } while (count < total_count)
