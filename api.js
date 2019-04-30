@@ -108,17 +108,6 @@ class API {
       }
     }
     
-    this.search = async function(query, page, perPage) {
-      const str = this.tm + "/tx_search?query=\"" + query + "\"&page=" + page + "&per_page=" + perPage
-      //console.log("str=" + str)
-      try {
-        const res = await axios.get(str)
-        return res.data.result
-      } catch (err) {
-        return null
-      }
-    }
-    
     this.status = async function() {
       try {
         const res = await axios.get(this.tm + "/status")
@@ -471,97 +460,56 @@ class API {
     return false
   }
   
-  async history(query, fromBlock, toBlock, includeLast) {
-    /*
-    const str = this.tm + "/tx_search?query=\"" + query + "\"&page=" + page + "&per_page=" + perPage
-    
-    /tx_search?query="tx.height > 10 AND tx.height < 20"
-    
+  async history(query, fromBlock, toBlock) {
+    const baseurl = this.tm + "/tx_search?query=\"" + query + " AND tx.height>" + fromBlock + " AND tx.height<" + toBlock + "\""
+    var page = 0
+    var count = 0
+    const perPage = 100
+    const history = []
+    var total_count = 0
     try {
-      const res = await axios.get(str)
-      return res.data.result
+      do {
+        page++
+        const url = baseurl + "&page=" + page + "&per_page=" + perPage
+        //console.log("url=" + url)
+    
+        const res = await axios.get(url)
+        //console.log("res=" + JSON.stringify(res))
+        
+        total_count = res.data.result.total_count
+        //console.log("count=" + count + " total_count=" + total_count)
+        
+        const txs = res.data.result.txs
+        //console.log("txs.length=" + txs.length)
+        
+        for (var i=0; i<txs.length; i++) {
+          const tx = txs[i] 
+          const height = parseInt(tx.height, 10)
+            var data = {}
+            data.tags = []
+            if (tx.tx_result.data !== undefined) {
+              data = Object.assign(data, JSON.parse(Buffer.from(tx.tx_result.data, "base64")))
+            }
+            if (tx.tx_result.tags !== undefined) {
+              tx.tx_result.tags.map(tag => {
+                data.tags.push({
+                  key: Buffer.from(tag.key, "base64").toString(),
+                  value: Buffer.from(tag.value, "base64").toString()
+                })
+              })
+            }
+            data.block = height
+            data.index = count++
+            history.push(data)
+        } 
+        
+      } while (count < total_count)
+      return history
+      
     } catch (err) {
+      console.log("Error in fetching history: " + err.message)
       return null
     }
-    */
-    
-    // get total txs
-    var res = await this.search(query, 0, 1)
-    if (res === null) return []
-    const total = parseInt(res.total_count, 10)
-    if (total === 0) return []
-    res = await this.status()
-    var lo = 0
-    var hi = res.sync_info.latest_block_height
-    while (hi-lo > 1) {
-      //console.log("lo=" + lo + " hi=" + hi)
-      var mid = Math.floor((hi + lo) / 2)
-      res = await this.search(query, mid, 1)
-      var test = parseInt(res.txs[0].height, 10)
-      if (test >= fromBlock) {
-        hi = mid
-      } else {
-        lo = mid
-      }
-    }
-    const first = lo
-    // load transactions
-    const history = []
-    var height = fromBlock
-    var index = first
-    const pageSize = 100
-    var last = null
-    do {
-      //console.log("index=" + index)
-      const page = Math.floor(index / pageSize) + 1  // 1 based
-      index = (page-1) * pageSize
-      //console.log("page=" + page)
-      res = await this.search(query, page, pageSize)
-      res.txs = res.txs.sort((x1, x2) => {
-        const h1 = parseInt(x1.height, 10)
-        const h2 = parseInt(x2.height, 10)
-        if (h1 > h2) return 1
-        if (h1 < h2) return -1
-        if (x1.index > x2.index) return 1
-        if (x1.index < x2.index) return -1
-        return 0
-      })
-      //console.log("res.length=" + res.txs.length)
-      for (var i=0; i<res.txs.length; i++) {
-        const tx = res.txs[i] 
-        height = parseInt(tx.height, 10)
-        if (includeLast && height < fromBlock) {
-          last = JSON.parse(Buffer.from(tx.tx_result.data, "base64"))
-          last.block = height
-          last.index = (page-1) * pageSize + i
-        }
-        if (height >= fromBlock && height <= toBlock) {
-          var data = {}
-          data.tags = []
-          if (tx.tx_result.data !== undefined) {
-            data = Object.assign(data, JSON.parse(Buffer.from(tx.tx_result.data, "base64")))
-          }
-          if (tx.tx_result.tags !== undefined) {
-            tx.tx_result.tags.map(tag => {
-              data.tags.push({
-                key: Buffer.from(tag.key, "base64").toString(),
-                value: Buffer.from(tag.value, "base64").toString()
-              })
-            })
-          }
-          data.block = height
-          data.index = (page-1) * pageSize + i
-          if (includeLast && last !== null) {
-            history.push(last)
-            last = null
-          }
-          history.push(data)
-        }
-      }
-      index += pageSize
-      if (index > total) index = total
-    } while (height < toBlock && index < total)
-    return history
   }
   
   async subscribe(query, cb) {
