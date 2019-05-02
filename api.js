@@ -376,7 +376,7 @@ class API {
   async marketTrade(market, duration, tradetype, quantity) {
     //const unlock = await this.mutex.lock()
     try {
-      const url = "/microtick/markettrade/" + this.wallet.cosmosAddress + "/" + market + "/" + duration + "/" + tradetype + "/" + quantity
+      const url = "/microtick/markettrade/" + this.wallet.cosmosAddress + "/" + market + "/" + duration + "/" + tradetype + "/" + quantity + "quantity"
       const msg = await this.cosmosQuery(url)
       const res = await this.cosmosPostTx(msg)
       const id = res.tx_result.tags.reduce((acc, t) => {
@@ -396,7 +396,7 @@ class API {
   async limitTrade(market, duration, tradetype, maxpremium) {
     //const unlock = await this.mutex.lock()
     try {
-      const url = "/microtick/limittrade/" + this.wallet.cosmosAddress + "/" + market + "/" + duration + "/" + tradetype + "/" + maxpremium
+      const url = "/microtick/limittrade/" + this.wallet.cosmosAddress + "/" + market + "/" + duration + "/" + tradetype + "/" + maxpremium + "premium"
       const msg = await this.cosmosQuery(url)
       const res = await this.cosmosPostTx(msg)
       const id = res.tx_result.tags.reduce((acc, t) => {
@@ -462,6 +462,7 @@ class API {
   }
   
   async history(query, fromBlock, toBlock) {
+    if (fromBlock < 0) fromBlock = 0
     const baseurl = this.tm + "/tx_search?query=\"" + query + " AND tx.height>" + fromBlock + " AND tx.height<" + toBlock + "\""
     var page = 0
     var count = 0
@@ -472,7 +473,7 @@ class API {
       do {
         page++
         const url = baseurl + "&page=" + page + "&per_page=" + perPage
-        //console.log("url=" + url)
+        console.log("url=" + url)
     
         const res = await axios.get(url)
         //console.log("res=" + JSON.stringify(res))
