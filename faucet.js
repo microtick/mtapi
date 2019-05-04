@@ -12,7 +12,7 @@ app.get('/:address', (req, res) => {
         console.log("Address: " + addr)
         exec("mtcli query account " + addr, err => {
             if (err !== null) {
-                exec("~/.shapeshift/mtcli.exp " + req.params.address, (err, stdout, stderr) => {
+                exec("./mtcli.exp " + req.params.address, (err, stdout, stderr) => {
                     if (!err) {
                         console.log("Success")
                         res.send("Success")

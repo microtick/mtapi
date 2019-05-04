@@ -81,12 +81,6 @@ function prepareSignBytes(jsonTx) {
     return jsonTx
   }
   
-  // Check for type / value keys
-  if (Object.keys(jsonTx).length === 2 && jsonTx['type'] !== undefined && jsonTx['value'] !== undefined) {
-      // remove this layer of hierarchy, process value only
-      jsonTx = jsonTx.value
-  }
-  
   let sorted = {}
   Object.keys(jsonTx)
     .sort()
@@ -159,6 +153,7 @@ function sign(jsonTx, wallet, requestMetaData) {
   //console.log("TX=" + JSON.stringify(jsonTx))
   const signMessage = createSignMessage(jsonTx, '' + sequence,
     requestMetaData.account_number, requestMetaData.chain_id)
+  //console.log("signMessage=" + signMessage)
   const signatureBuffer = signWithPrivateKey(signMessage, wallet.privateKey)
   const pubKeyBuffer = Buffer.from(wallet.publicKey, `hex`)
   wallet.lastSequence = sequence

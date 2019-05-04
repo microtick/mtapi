@@ -45,7 +45,7 @@ if {$force_conservative} {
 
 
 set timeout -1
-spawn mtcli --home ~/.shapeshift tx send $address 1000fox --from shapeshift --chain-id mtzone
+spawn mtcli --home=./shapeshift tx send $address 1000fox --from shapeshift --chain-id mtzone
 match_max 100000
 expect -exact "Password to sign with 'shapeshift':"
 send -- "temp1234\r"
