@@ -151,18 +151,20 @@ class API {
               if (tmpdata.result.data !== undefined && tmpdata.result.data.value.TxResult !== undefined) {
                 const query = tmpdata.result.query.split('=')
                 const data = tmpdata.result.data.value.TxResult
-                const event = {
-                  height: parseInt(data.height, 10),
+                const json = JSON.parse(Buffer.from(data.result.data, 'base64').toString())
+                const event = Object.assign({
+                  block: parseInt(data.height, 10),
                   event: query[0],
                   value: query[1].replace(/(^')|('$)/g, ''),
-                  data: JSON.parse(Buffer.from(data.result.data, 'base64').toString()),
+                  /*
                   tags: data.result.tags.map(tag => {
                     return {
                       key: Buffer.from(tag.key, 'base64').toString(),
                       value: Buffer.from(tag.value, 'base64').toString()
                     }
                   })
-                }
+                  */
+                }, json)
                 obj.subscriptions[tmpdata.result.query].map(cb => {
                   cb.callback(event)
                   return false
@@ -240,7 +242,10 @@ class API {
   async blockHandler() {
     //console.log("API block handler")
     const hashes = Object.keys(this.pending)
-    console.log("Pending Txs: " + hashes.length)
+    //console.log("Pending Txs: " + hashes.length)
+    if (hashes.length > 25) {
+      console.log("Warning: " + hashes.length + " pending Txs")
+    }
     hashes.map(async el => {
       const url = "/tx?hash=0x" + el
       //console.log("URL=" + url)
@@ -448,6 +453,11 @@ class API {
     return res
   }
   
+  async getTrade(id) {
+    const res = await this.cosmosQuery("/microtick/trade/" + id)
+    return res
+  }
+  
   async canModify(id) {
     const res = await this.cosmosQuery("/microtick/quote/" + id)
     const now = Date.now()
@@ -473,15 +483,17 @@ class API {
       do {
         page++
         const url = baseurl + "&page=" + page + "&per_page=" + perPage
-        console.log("url=" + url)
+        //console.log("url=" + url)
     
         const res = await axios.get(url)
-        //console.log("res=" + JSON.stringify(res))
+        //console.log("res=" + JSON.stringify(res, null, 2))
+        //console.log("date=" + res.headers.date)
         
         total_count = res.data.result.total_count
         //console.log("count=" + count + " total_count=" + total_count)
         
         const txs = res.data.result.txs
+        //console.log("txs=" + JSON.stringify(txs, null, 2))
         //console.log("txs.length=" + txs.length)
         
         for (var i=0; i<txs.length; i++) {
@@ -491,8 +503,10 @@ class API {
           var data = {}
           data.tags = []
           if (tx.tx_result.data !== undefined) {
-            data = Object.assign(data, JSON.parse(Buffer.from(tx.tx_result.data, "base64")))
+            const json = JSON.parse(Buffer.from(tx.tx_result.data, "base64"))
+            data = Object.assign(data, json)
           }
+          /*
           if (tx.tx_result.tags !== undefined) {
             tx.tx_result.tags.map(tag => {
               data.tags.push({
@@ -501,6 +515,7 @@ class API {
               })
             })
           }
+          */
           data.block = height
           data.index = count++
           history.push(data)
