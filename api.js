@@ -289,7 +289,6 @@ class API {
   }
   
   async createMarket(market) {
-    //const unlock = await this.mutex.lock()
     try {
       const url = "/microtick/createmarket/" + this.wallet.cosmosAddress + "/" + market
       const msg = await this.cosmosQuery(url)
@@ -297,11 +296,9 @@ class API {
     } catch (err) {
       console.log("Create market failed: " + err.message)
     }
-    //unlock()
   }
   
   async createQuote(market, dur, backing, spot, premium) {
-    //const unlock = await this.mutex.lock()
     try {
       const url = "/microtick/createquote/" + this.wallet.cosmosAddress + "/" + market +
         "/" + dur + "/" + backing + "fox/" + spot + "spot/" + premium + "premium"
@@ -313,16 +310,13 @@ class API {
         }
         return acc
       }, null)
-      //unlock()
       return id
     } catch (err) {
       console.log("Create quote failed: " + err.message)
     }
-    //unlock()
   }
   
   async cancelQuote(id) {
-    //const unlock = await this.mutex.lock()
     try {
       const url = "/microtick/cancelquote/" + this.wallet.cosmosAddress + "/" + id
       const msg = await this.cosmosQuery(url)
@@ -330,11 +324,9 @@ class API {
     } catch (err) {
       console.log("Cancel quote failed: " + err.message)
     }
-    //unlock()
   }
   
   async depositQuote(id, amount) {
-    //const unlock = await this.mutex.lock()
     try {
       const url = "/microtick/depositquote/" + this.wallet.cosmosAddress + "/" + id + "/" + amount + "fox"
       const msg = await this.cosmosQuery(url)
@@ -342,11 +334,9 @@ class API {
     } catch (err) {
       console.log("Deposit quote failed: " + err.message)
     }
-    //unlock()
   }
   
   async updateQuote(id, spot, premium) {
-    //const unlock = await this.mutex.lock()
     try {
       const url = "/microtick/updatequote/" + this.wallet.cosmosAddress + "/" + id + "/" + spot + "spot/" + premium + "premium"
       const msg = await this.cosmosQuery(url)
@@ -354,11 +344,9 @@ class API {
     } catch (err) {
       console.log("Update quote failed: " + err.message)
     }
-    //unlock()
   }
   
   async marketTrade(market, duration, tradetype, quantity) {
-    //const unlock = await this.mutex.lock()
     try {
       const url = "/microtick/markettrade/" + this.wallet.cosmosAddress + "/" + market + "/" + duration + "/" + tradetype + "/" + quantity + "quantity"
       const msg = await this.cosmosQuery(url)
@@ -369,16 +357,13 @@ class API {
         }
         return acc
       }, null)
-      //unlock()
       return id
     } catch (err) {
       console.log("Market trade failed: " + err.message)
     }
-    //unlock()
   }
   
   async limitTrade(market, duration, tradetype, maxpremium, maxcost) {
-    //const unlock = await this.mutex.lock()
     try {
       const url = "/microtick/limittrade/" + this.wallet.cosmosAddress + "/" + market + "/" + duration + "/" + tradetype + 
         "/" + maxpremium + "premium/" + maxcost + "fox"
@@ -391,16 +376,13 @@ class API {
         }
         return acc
       }, null)
-      //unlock()
       return id
     } catch (err) {
       console.log("Limit trade failed: " + err.message)
     }
-    //unlock()
   }
   
   async settleTrade(id) {
-    //const unlock= await this.mutex.lock()
     try {
       const url = "/microtick/settletrade/" + this.wallet.cosmosAddress + "/" + id
       const msg = await this.cosmosQuery(url)
@@ -408,7 +390,6 @@ class API {
     } catch (err) {
       console.log("Settle trade failed: " + err.message)
     }
-    //unlock()
   }
   
   async getMarketInfo(market) {
