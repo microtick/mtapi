@@ -2,36 +2,6 @@ const wallet = require('./wallet')
 const axios = require('axios')
 const WebSocketClient = require('websocket').w3cwebsocket
 
-/*
-class Mutex {
- 
-  constructor() {
-    this.promise = Promise.resolve()
-  }
- 
-  async lock() {
-    const cur = this.promise
-    var unlock
-    console.log("1")
-    await new Promise(outerResolve => {
-      this.promise = new Promise(innerResolve => {
-        unlock = () => {
-          console.log("2")
-          innerResolve()
-        }
-        console.log("3")
-        outerResolve()
-      })
-    })
-    console.log("4")
-    await cur
-    console.log("5")
-    return unlock
-  }
-  
-}
-*/
-
 class API {
   
   constructor(tendermint, cosmos, faucet) {
@@ -66,7 +36,6 @@ class API {
         if (err.response !== undefined) {
           errmsg = ": " + err.response.data.message
         }
-        console.log(err.stack)
         throw new Error("Cosmos query failed" + errmsg)
       }
     }
@@ -97,7 +66,17 @@ class API {
             }
           }
         })
-        //console.log("txres=" + JSON.stringify(txres, null, 2))
+        if (txres.tx_result.data !== undefined) {
+          txres.tx_result.data = JSON.parse(Buffer.from(txres.tx_result.data, 'base64').toString())
+        }
+        if (txres.tx_result.tags !== undefined) {
+          txres.tx_result.tags = txres.tx_result.tags.map(t => {
+            return {
+              key: Buffer.from(t.key, 'base64').toString(),
+              value: Buffer.from(t.value, 'base64').toString()
+            }
+          })
+        }
         return txres
       } catch (err) {
         //console.log("cosmosPostTx: " + JSON.stringify(msg, null, 2))
@@ -330,7 +309,7 @@ class API {
       const res = await this.cosmosPostTx(msg)
       const id = res.tx_result.tags.reduce((acc, t) => {
         if (t.key === 'mtm.NewQuote') {
-          return t.value
+          return parseInt(t.value, 10)
         }
         return acc
       }, null)
@@ -386,7 +365,7 @@ class API {
       const res = await this.cosmosPostTx(msg)
       const id = res.tx_result.tags.reduce((acc, t) => {
         if (t.key === 'mtm.NewTrade') {
-          return t.value
+          return parseInt(t.value, 10)
         }
         return acc
       }, null)
@@ -398,15 +377,17 @@ class API {
     //unlock()
   }
   
-  async limitTrade(market, duration, tradetype, maxpremium) {
+  async limitTrade(market, duration, tradetype, maxpremium, maxcost) {
     //const unlock = await this.mutex.lock()
     try {
-      const url = "/microtick/limittrade/" + this.wallet.cosmosAddress + "/" + market + "/" + duration + "/" + tradetype + "/" + maxpremium + "premium"
+      const url = "/microtick/limittrade/" + this.wallet.cosmosAddress + "/" + market + "/" + duration + "/" + tradetype + 
+        "/" + maxpremium + "premium/" + maxcost + "fox"
+      console.log("url=" + url)
       const msg = await this.cosmosQuery(url)
       const res = await this.cosmosPostTx(msg)
       const id = res.tx_result.tags.reduce((acc, t) => {
         if (t.key === 'mtm.NewTrade') {
-          return t.value
+          return parseInt(t.value, 10)
         }
         return acc
       }, null)
@@ -558,43 +539,6 @@ class API {
   }
   
 }
-
-/*
-async function main() {
-  const localWallet = await wallet.generate()
-  console.log("Created wallet: " + localWallet.cosmosAddress)
-  //const url = "microtick/createmarket/cosmos1qlzp94qve0np3du8k43epfc532rxwclxen0pnu/ETHUSD"
-  try {
-    // fund account
-    console.log("Requesting funds...")
-    await axios.get('http://localhost:3000/' + localWallet.cosmosAddress)
-    
-    // generate transaction
-    const url = "microtick/createmarket/" + localWallet.cosmosAddress + "/TEST5"
-    const res = await axios.get('http://localhost:1317/' + url)
-    const msg = res.data
-    console.log("unsigned=" + JSON.stringify(msg))
-    
-    const signed = wallet.sign(msg.tx, localWallet, {
-      sequence: msg.sequence,
-      account_number: msg.accountNumber,
-      chain_id: msg.chainId
-    })
-    console.log(JSON.stringify(signed))
-    
-    // broadcast
-    const broadurl = "microtick/broadcast"
-    const res2 = await axios.post('http://localhost:1317/' + broadurl, {
-      tx: JSON.stringify(signed)
-    }) 
-    console.log(res2.data)
-  } catch (err) {
-    console.log(err.message)
-  }
-}
-
-main()
-*/
 
 module.exports = (tm, cosmos, faucet) => {
   return new API(tm, cosmos, faucet)
