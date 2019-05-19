@@ -367,7 +367,7 @@ class API {
     try {
       const url = "/microtick/limittrade/" + this.wallet.cosmosAddress + "/" + market + "/" + duration + "/" + tradetype + 
         "/" + maxpremium + "premium/" + maxcost + "fox"
-      console.log("url=" + url)
+      //console.log("url=" + url)
       const msg = await this.cosmosQuery(url)
       const res = await this.cosmosPostTx(msg)
       const id = res.tx_result.tags.reduce((acc, t) => {
