@@ -445,7 +445,6 @@ class API {
       do {
         page++
         const url = baseurl + "&page=" + page + "&per_page=" + perPage
-        //console.log("url=" + url)
     
         const res = await axios.get(url)
         //console.log("res=" + JSON.stringify(res, null, 2))
@@ -465,7 +464,8 @@ class API {
           var data = {}
           data.tags = []
           if (tx.tx_result.data !== undefined) {
-            const json = JSON.parse(Buffer.from(tx.tx_result.data, "base64"))
+            const str = Buffer.from(tx.tx_result.data, "base64").toString()
+            const json = JSON.parse(str)
             data = Object.assign(data, json)
           }
           /*
@@ -480,6 +480,7 @@ class API {
           */
           data.block = height
           data.index = count++
+          data.time = new Date(data.time).getTime()
           history.push(data)
         } 
         
