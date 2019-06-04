@@ -527,7 +527,6 @@ class API {
           const data = this.formatTx(txs[i], which)
           ret.push(data)
         } 
-        console.log(JSON.stringify(ret, null, 2))
         return ret
       } catch (err) {
         console.log("Error fetching total account events: " + err.message)
