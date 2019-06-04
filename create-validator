@@ -1,0 +1,4 @@
+#!/bin/sh
+
+mtcli tx staking create-validator -y --amount=1000fox --pubkey cosmosvalconspub1zcjduepqg9qmktka5xzzg7tp7h2g67wlmmsq9ezmpaclm8vf73nstg3777zq0wwhu6 --moniker "Mark's Basement Validator" --commission-rate="0.2" --commission-max-rate="0.5" --commission-max-change-rate="0.01" --min-self-delegation=100 --from=validator
+

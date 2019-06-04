@@ -433,6 +433,31 @@ class API {
     return false
   }
   
+  formatTx(tx, whichTags) {
+    const height = parseInt(tx.height, 10)
+    
+    var data = {}
+    data.tags = {}
+    if (tx.tx_result.data !== undefined) {
+      const str = Buffer.from(tx.tx_result.data, "base64").toString()
+      const json = JSON.parse(str)
+      data = Object.assign(data, json)
+    }
+    if (whichTags != null && tx.tx_result.tags !== undefined) {
+      tx.tx_result.tags.map(tag => {
+        whichTags.map(which => {
+          const key = Buffer.from(tag.key, "base64").toString()
+          if (which === key) {
+            data.tags[key] = Buffer.from(tag.value, "base64").toString()
+          }
+        })
+      })
+    }
+    data.block = height
+    data.time = new Date(data.time).getTime()
+    return data
+  }
+ 
   async history(query, fromBlock, toBlock) {
     if (fromBlock < 0) fromBlock = 0
     const baseurl = this.tm + "/tx_search?query=\"" + query + " AND tx.height>" + fromBlock + " AND tx.height<" + toBlock + "\""
@@ -458,29 +483,8 @@ class API {
         //console.log("txs.length=" + txs.length)
         
         for (var i=0; i<txs.length; i++) {
-          const tx = txs[i] 
-          const height = parseInt(tx.height, 10)
-          
-          var data = {}
-          data.tags = []
-          if (tx.tx_result.data !== undefined) {
-            const str = Buffer.from(tx.tx_result.data, "base64").toString()
-            const json = JSON.parse(str)
-            data = Object.assign(data, json)
-          }
-          /*
-          if (tx.tx_result.tags !== undefined) {
-            tx.tx_result.tags.map(tag => {
-              data.tags.push({
-                key: Buffer.from(tag.key, "base64").toString(),
-                value: Buffer.from(tag.value, "base64").toString()
-              })
-            })
-          }
-          */
-          data.block = height
+          const data = this.formatTx(txs[i], null)
           data.index = count++
-          data.time = new Date(data.time).getTime()
           history.push(data)
         } 
         
@@ -491,6 +495,44 @@ class API {
       console.log("Error in fetching history: " + err.message)
       return null
     }
+  }
+  
+  async totalEvents(acct) {
+    const url = this.tm + "/tx_search?query=\"acct." + acct + " CONTAINS '.'\"&page=1&per_page=1"
+    try {
+      const res = await axios.get(url)
+      return res.data.result.total_count
+    } catch (err) {
+      console.log("Error fetching total account events: " + err.message)
+    }
+    return 0
+  }
+  
+  async pageHistory(acct, page, inc) {
+    //console.log("Fetching page " + page + "(" + inc + ")" + " for account " + acct)
+    const url = this.tm + "/tx_search?query=\"acct." + acct + " CONTAINS '.'\"&page=" + page + 
+      "&per_page=" + inc
+      try {
+        const res = await axios.get(url)
+        const txs = res.data.result.txs
+        //console.log("txs=" + JSON.stringify(txs, null, 2))
+        //console.log("txs.length=" + txs.length)
+        
+        const ret = []
+        const which = [
+          "acct." + acct
+        ]
+        
+        for (var i=0; i<txs.length; i++) {
+          const data = this.formatTx(txs[i], which)
+          ret.push(data)
+        } 
+        console.log(JSON.stringify(ret, null, 2))
+        return ret
+      } catch (err) {
+        console.log("Error fetching total account events: " + err.message)
+      }
+      return null
   }
   
   async subscribe(query, cb) {
