@@ -124,6 +124,7 @@ class API {
             const tmpdata = JSON.parse(msg.data)
             if (tmpdata === undefined || tmpdata.error) {
               console.log("Error: " + tmpdata.error.data)
+              obj.client.close()
               return
             }
             if (tmpdata.result.query !== undefined) {
@@ -458,7 +459,7 @@ class API {
     return data
   }
  
-  async history(query, fromBlock, toBlock) {
+  async history(query, fromBlock, toBlock, whichTags) {
     if (fromBlock < 0) fromBlock = 0
     const baseurl = this.tm + "/tx_search?query=\"" + query + " AND tx.height>" + fromBlock + " AND tx.height<" + toBlock + "\""
     var page = 0
@@ -483,7 +484,7 @@ class API {
         //console.log("txs.length=" + txs.length)
         
         for (var i=0; i<txs.length; i++) {
-          const data = this.formatTx(txs[i], null)
+          const data = this.formatTx(txs[i], whichTags)
           data.index = count++
           history.push(data)
         } 
