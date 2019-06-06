@@ -409,16 +409,26 @@ class API {
   }
   
   async getQuote(id) {
-    const res = await this.cosmosQuery("/microtick/quote/" + id) 
-    if (res !== undefined) {
-      res.dur = this.durationLookup[res.duration]
+    try {
+      const res = await this.cosmosQuery("/microtick/quote/" + id) 
+      if (res !== undefined) {
+        res.dur = this.durationLookup[res.duration]
+        return res
+      }
+    } catch (err) {
+      console.log("GetQuote: " + err.message)
     }
-    return res
+    return null
   }
   
   async getTrade(id) {
-    const res = await this.cosmosQuery("/microtick/trade/" + id)
-    return res
+    try {
+      const res = await this.cosmosQuery("/microtick/trade/" + id)
+      return res
+    } catch (err) {
+      console.log("GetTrade: " + err.message)
+    }
+    return null
   }
   
   async canModify(id) {
