@@ -4,12 +4,11 @@ const WebSocketClient = require('websocket').w3cwebsocket
 
 class API {
   
-  constructor(tendermint, cosmos, faucet) {
+  constructor(tendermint, cosmos) {
     this.pending = {}
     this.tm = tendermint
     this.ws = this.tm.replace("http:", "ws:") + "/websocket"
     this.cosmos = cosmos
-    this.faucet = faucet
     this.durationLookup = {
       "5minute": 300,
       "15minute": 900,
@@ -277,11 +276,13 @@ class API {
       publicKey: keys.pub,
       cosmosAddress: keys.acct
     }
+    /*
     try {
       await axios.get(this.faucet + "/" + this.wallet.cosmosAddress)
     } catch (err) {
       throw new Error("Unable to connect to faucet")
     }
+    */
   }
   
   async getAccountInfo(acct) {
@@ -574,6 +575,6 @@ class API {
   
 }
 
-module.exports = (tm, cosmos, faucet) => {
-  return new API(tm, cosmos, faucet)
+module.exports = (tm, cosmos) => {
+  return new API(tm, cosmos)
 }
