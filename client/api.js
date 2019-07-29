@@ -74,8 +74,8 @@ class API {
     
     this.durationFromSeconds = seconds => {
       switch (seconds) {
-        case 60: return "1minute"
         case 300: return "5minute"
+        case 900: return "15minute"
         case 3600: return "1hour"
         case 14400: return "4hour"
         case 43200: return "12hour"
