@@ -42,7 +42,7 @@ class API {
     this.subid = 0
     this.submap = {}
     
-    this.protocol = new protocol(10000, async (env, name, payload) => {
+    this.protocol = new protocol(240000, async (env, name, payload) => {
       return await this.handleMessage(env, name, payload)
     }, (env, name, payload) => {
       //console.log("Event: " + name)

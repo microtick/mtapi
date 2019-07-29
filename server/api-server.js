@@ -20,6 +20,9 @@ const NEWBLOCK = "tm.event='NewBlock'"
 const TXTIMEOUT = 30000
 const pending = {}
 
+// Caching
+const historyCache = {}
+
 // One tendermint subscription per socket
 const tmsockets = {}
 // Added at subsciption time: mapping event -> []id
@@ -272,7 +275,6 @@ const handleMessage = async (env, name, payload) => {
         }
       case 'history':
         res = await doHistory(payload.query, payload.from, payload.to, payload.tags)
-        console.log("history length=" + res.length)
         return {
           status: true,
           history: res
@@ -431,25 +433,42 @@ const formatTx = (tx, whichTags) => {
       })
     })
   }
+  data.hash = tx.hash
+  data.txindex = tx.index
   data.block = height
   data.time = new Date(data.time).getTime()
   return data
 }
 
 const doHistory = async (query, fromBlock, toBlock, whichTags) => {
-  if (fromBlock < 0) fromBlock = 0
-  const baseurl = "/tx_search?query=\"" + query + " AND tx.height>" + fromBlock + " AND tx.height<" + toBlock + "\""
   var page = 0
   var count = 0
   const perPage = 100
   const history = []
   var total_count = 0
+  
+  if (fromBlock < 0) fromBlock = 0
+  if (historyCache[query] === undefined) {
+    historyCache[query] = {
+      startBlock: Number.MAX_VALUE,
+      endBlock: 0,
+      data: [],
+      hit: {}
+    }
+  }
+  const cache = historyCache[query]
+  
+  const baseurl = "/tx_search?query=\"" + query + " AND tx.height>" + fromBlock + " AND tx.height<" + toBlock + "\""
   try {
     do {
       page++
       const url = baseurl + "&page=" + page + "&per_page=" + perPage
   
+      const start = Date.now()
+      console.log("query=" + url)
       const res = await queryTendermint(url)
+      const end = Date.now()
+      console.log("done: " + (end - start) + "ms")
       //console.log("res=" + JSON.stringify(res, null, 2))
       //console.log("date=" + res.headers.date)
       
@@ -464,9 +483,24 @@ const doHistory = async (query, fromBlock, toBlock, whichTags) => {
         const data = formatTx(txs[i], whichTags)
         data.index = count++
         history.push(data)
+        /*
+        if (!cache.hit[data.hash]) {
+          cache.hit[data.hash] = true
+          cache.data.push(data)
+          cache.data.sort((a, b) => {
+            if (a.block === b.block) return a.txindex - b.txindex
+            return a.block - b.block
+          })
+          if (data.block < cache.startBlock) cache.startBlock = data.block
+          if (data.block > cache.endBlock) cache.endBlock = data.block
+        }
+        */
       } 
       
     } while (count < total_count)
+    
+    console.log("cache range " + query + "=[" + cache.startBlock + "," + cache.endBlock + "]")
+    
     return history
     
   } catch (err) {
