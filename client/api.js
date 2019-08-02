@@ -82,6 +82,16 @@ class API {
       }
       throw new Error("Unknown duration")
     }
+    
+    this.secondsFromDuration = dur => {
+      switch (dur) {
+        case "5minute": return 300
+        case "15minute": return 900
+        case "1hour": return 3600
+        case "4hour": return 14400
+        case "12hour": return 43200
+      }
+    }
   
   }
   

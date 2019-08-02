@@ -1,6 +1,7 @@
 const ws = require('ws')
 const protocol = require('../lib/protocol.js')
 const axios = require('axios')
+const objecthash = require('object-hash')
 const { marshalTx, unmarshalTx } = require('./amino.js')
 
 process.on('unhandledRejection', error => {
@@ -21,7 +22,7 @@ const TXTIMEOUT = 30000
 const pending = {}
 
 // Caching
-const historyCache = {}
+var cache = {}
 
 // One tendermint subscription per socket
 const tmsockets = {}
@@ -113,6 +114,10 @@ const unsubscribe = (id, event) => {
 
 const sendEvent = (event, payload) => {
   if (event === NEWBLOCK) {
+    // Reset cache
+    cache = {}
+    
+    // Check pending Tx hashes
     const hashes = Object.keys(pending)
     if (hashes.length > 25) {
       console.log("Warning: " + hashes.length + " pending Txs")
@@ -206,6 +211,18 @@ const queue = new protocol(10000, async (env, name, payload) => {
 
 const handleMessage = async (env, name, payload) => {
   console.log("  COMMAND " + env.id + " " + name + " " + JSON.stringify(payload))
+  
+  const hash = objecthash({
+    name: name,
+    payload: payload
+  }) 
+  
+  if (cache[hash] !== undefined) {
+    console.log("Responding from cache: " + hash)
+    return cache[hash]
+  }
+  
+  var returnObj
   try {
     switch (name) {
       case 'connect':
@@ -225,73 +242,84 @@ const handleMessage = async (env, name, payload) => {
         }
       case 'blockinfo':
         var res = await queryTendermint('/status')
-        return {
+        returnObj = {
           status: true,
           block: parseInt(res.sync_info.latest_block_height, 10),
           timestamp: Math.floor(new Date(res.sync_info.latest_block_time).getTime() / 1000)
         }
+        break
       case 'getblock':
         res = await queryTendermint('/block?height=' + payload.blockNumber)
-        return {
+        returnObj = {
           status: true,
           block: res.block_meta
         }
+        break
       case 'getacctinfo':
         res = await queryCosmos('/microtick/account/' + payload.acct)
-        return {
+        returnObj = {
           status: true,
           info: res
         }
+        break
       case 'getmarketinfo':
         res = await queryCosmos('/microtick/market/' + payload.market)
-        return {
+        returnObj = {
           status: true,
           info: res
         }
+        break
       case 'getorderbookinfo':
         res = await queryCosmos('/microtick/orderbook/' + payload.market + "/" + 
           payload.duration)
-        return {
+        returnObj = {
           status: true,
           info: res
         }
+        break
       case 'getmarketspot':
         res = await queryCosmos('/microtick/consensus/' + payload.market)
-        return {
+        returnObj = {
           status: true,
           info: res
         }
+        break
       case 'getquote':
         res = await queryCosmos('/microtick/quote/' + payload.id)
-        return {
+        returnObj = {
           status: true,
           info: res
         }
+        break
       case 'gettrade':
         res = await queryCosmos('/microtick/trade/' + payload.id)
-        return {
+        returnObj = {
           status: true,
           info: res
         }
+        break
       case 'history':
         res = await doHistory(payload.query, payload.from, payload.to, payload.tags)
-        return {
+        returnObj = {
           status: true,
           history: res
         }
+        break
       case 'totalevents':
         res = await queryTendermint("/tx_search?query=\"acct." + env.acct + 
           " CONTAINS '.'\"&page=1&per_page=1")
-        return {
+        returnObj = {
           status: true,
           total: res.total_count
         }
+        break
       case 'pagehistory':
         res = await pageHistory(env.acct, payload.page, payload.inc)
-        return {
+        returnObj = {
           status: true,
           history: res
         }
+        break
       case 'createmarket':
         res = await queryCosmos("/microtick/generate/createmarket/" + 
           env.acct + "/" + payload.market)
@@ -299,6 +327,7 @@ const handleMessage = async (env, name, payload) => {
           status: true,
           msg: res
         }
+        break
       case 'createquote':
         res = await queryCosmos("/microtick/generate/createquote/" +
           env.acct + "/" + 
@@ -404,6 +433,12 @@ const handleMessage = async (env, name, payload) => {
           info: txres
         }
     }
+    
+    // Save in cache
+    cache[hash] = returnObj
+    
+    return returnObj
+    
   } catch (err) {
     console.log(err.stack)
     return {
@@ -447,17 +482,6 @@ const doHistory = async (query, fromBlock, toBlock, whichTags) => {
   const history = []
   var total_count = 0
   
-  if (fromBlock < 0) fromBlock = 0
-  if (historyCache[query] === undefined) {
-    historyCache[query] = {
-      startBlock: Number.MAX_VALUE,
-      endBlock: 0,
-      data: [],
-      hit: {}
-    }
-  }
-  const cache = historyCache[query]
-  
   const baseurl = "/tx_search?query=\"" + query + " AND tx.height>" + fromBlock + " AND tx.height<" + toBlock + "\""
   try {
     do {
@@ -483,18 +507,6 @@ const doHistory = async (query, fromBlock, toBlock, whichTags) => {
         const data = formatTx(txs[i], whichTags)
         data.index = count++
         history.push(data)
-        /*
-        if (!cache.hit[data.hash]) {
-          cache.hit[data.hash] = true
-          cache.data.push(data)
-          cache.data.sort((a, b) => {
-            if (a.block === b.block) return a.txindex - b.txindex
-            return a.block - b.block
-          })
-          if (data.block < cache.startBlock) cache.startBlock = data.block
-          if (data.block > cache.endBlock) cache.endBlock = data.block
-        }
-        */
       } 
       
     } while (count < total_count)
