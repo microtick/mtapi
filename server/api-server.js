@@ -132,7 +132,7 @@ const sendEvent = (event, payload) => {
       const url = "http://" + tendermint + "/tx?hash=0x" + hash
       const res = await axios.get(url)
       if (res.data.error !== undefined) {
-        console.log("TX error: " + hash + " " + res.data.error)
+        console.log("TX error: " + hash + " " + JSON.stringify(res.data.error))
         pending[hash].failure(res.data.error)
         pending[hash].timedout = true
       } else if (res.data.result !== undefined) {
