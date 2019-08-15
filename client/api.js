@@ -312,6 +312,19 @@ class API {
     return response.history
   }
   
+  async marketHistory(market, startblock, endblock, target) {
+    const response = await this.protocol.newMessage('markethistory', {
+      market: market,
+      startblock: startblock,
+      endblock: endblock,
+      target: target
+    })
+    if (!response.status) {
+      throw new Error("Get market history failed: " + response.error)
+    }
+    return response.history
+  }
+  
   // Transactions
   
   async postTx(msg) {

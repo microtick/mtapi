@@ -2,7 +2,10 @@ const ws = require('ws')
 const protocol = require('../lib/protocol.js')
 const axios = require('axios')
 const objecthash = require('object-hash')
+const mongodb = require('mongodb').MongoClient
 const { marshalTx, unmarshalTx } = require('./amino.js')
+
+const USE_MONGO = false
 
 process.on('unhandledRejection', error => {
   if (error !== undefined) {
@@ -68,6 +71,9 @@ const subscribe = (id, event) => {
       sendEvent(obj.result.query, {
         data: obj.result.data
       })
+      if (USE_MONGO && event === NEWBLOCK && obj.result.data !== undefined) {
+        handleNewBlock(obj)
+      }
     })
 
     tmclient.on('close', () => {
@@ -398,6 +404,14 @@ const handleMessage = async (env, name, payload) => {
           status: true,
           msg: res
         }
+      case 'markethistory':
+        if (!USE_MONGO) throw new Error('No market tick DB')
+        res = await queryMarketHistory(payload.market, payload.startblock,
+          payload.endblock, payload.target)
+        return {
+          status: true,
+          history: res
+        }
       case 'posttx' :
         const bytes = marshalTx(payload.tx)
         //console.log(JSON.stringify(bytes))
@@ -488,11 +502,11 @@ const doHistory = async (query, fromBlock, toBlock, whichTags) => {
       page++
       const url = baseurl + "&page=" + page + "&per_page=" + perPage
   
-      const start = Date.now()
-      console.log("query=" + url)
+      //const start = Date.now()
+      //console.log("query=" + url)
       const res = await queryTendermint(url)
-      const end = Date.now()
-      console.log("done: " + (end - start) + "ms")
+      //const end = Date.now()
+      //console.log("done: " + (end - start) + "ms")
       //console.log("res=" + JSON.stringify(res, null, 2))
       //console.log("date=" + res.headers.date)
       
@@ -523,27 +537,225 @@ const doHistory = async (query, fromBlock, toBlock, whichTags) => {
 }
 
 const pageHistory = async (acct, page, inc) => {
-    //console.log("Fetching page " + page + "(" + inc + ")" + " for account " + acct)
-    const url = "/tx_search?query=\"acct." + acct + " CONTAINS '.'\"&page=" + page + 
-      "&per_page=" + inc
-      try {
-        const res = await queryTendermint(url)
-        const txs = res.txs
-        //console.log("txs=" + JSON.stringify(txs, null, 2))
-        //console.log("txs.length=" + txs.length)
-        
-        const ret = []
-        const which = [
-          "acct." + acct
-        ]
-        
-        for (var i=0; i<txs.length; i++) {
-          const data = formatTx(txs[i], which)
-          ret.push(data)
-        } 
-        return ret
-      } catch (err) {
-        console.log("Error fetching total account events: " + err.message)
+  //console.log("Fetching page " + page + "(" + inc + ")" + " for account " + acct)
+  const url = "/tx_search?query=\"acct." + acct + " CONTAINS '.'\"&page=" + page + 
+    "&per_page=" + inc
+    try {
+      const res = await queryTendermint(url)
+      const txs = res.txs
+      //console.log("txs=" + JSON.stringify(txs, null, 2))
+      //console.log("txs.length=" + txs.length)
+      
+      const ret = []
+      const which = [
+        "acct." + acct
+      ]
+      
+      for (var i=0; i<txs.length; i++) {
+        const data = formatTx(txs[i], which)
+        ret.push(data)
+      } 
+      return ret
+    } catch (err) {
+      console.log("Error fetching total account events: " + err.message)
+    }
+    return null
+}
+  
+// MongoDB - slurp up market ticks into database
+
+var handleNewBlock
+var queryMarketHistory
+
+if (USE_MONGO) {
+  
+  const mongodb = require('mongodb').MongoClient
+  const crypto = require('crypto')
+
+  var mongo = null
+  var syncing = false
+  var chainid
+  
+  mongodb.connect("mongodb://localhost:27017", { 
+    useNewUrlParser: true,
+    useUnifiedTopology: true
+  }, (err, client) => {
+    if (err === null) {
+      console.log("Connected to MongoDB")
+      mongo = client
+    }
+  })
+  
+  handleNewBlock = async obj => {
+    chainid = obj.result.data.value.block.header.chain_id
+    const height = parseInt(obj.result.data.value.block.header.height, 10)
+    //console.log(JSON.stringify(obj, null, 2))
+    
+    if (mongo !== null && mongo.isConnected()) {
+      const db = mongo.db(chainid)
+      
+      await db.createCollection('meta', { capped: true, max: 1, size: 4096 })
+      await db.createCollection('counters', { capped: true, max: 1, size: 4096 })
+      await db.createCollection('ticks')
+      
+      const counters = await db.collection('counters')
+      if (await counters.find().count() === 0) {
+        await counters.insertOne({ 
+          ticks: 1
+        })
       }
-      return null
+      
+      const hasIndex = await db.collection('ticks').indexExists('history')
+      if (!hasIndex) {
+        console.log("Creating index")
+        await db.collection('ticks').createIndex({
+          index: 1,
+          height: 1,
+          market: 1
+        }, {
+          name: 'history'
+        })
+      }
+      
+      const synced = await isSynced(db, height)
+      //console.log("synced = " + synced)
+      if (synced) {
+        const block = await queryTendermint('/block?height=' + height)
+        insertBlock(db, block.block)
+      } else if (!syncing) {
+        sync(db)
+      }
+    }
   }
+  
+  const isSynced = async (db, height) => {
+    const curs = await db.collection('meta').find()
+    if (await curs.hasNext()) {
+      const doc = await curs.next()
+      if (height === doc.syncHeight + 1) {
+        return true
+      }
+    } 
+    return false
+  }
+  
+  const sync = async db => {
+    syncing = true
+    console.log("syncing...")
+    
+    var block
+    do {
+      const doc = await db.collection('meta').find().next()
+    
+      if (doc !== null) {
+        var curBlock = doc.syncHeight + 1
+      } else {
+        curBlock = 1
+      }
+      block = await queryTendermint('/block?height=' + curBlock)
+      if (block !== undefined) {
+        await insertBlock(db, block.block)
+      }
+    } while (block !== undefined)
+    
+    console.log("done syncing...")
+    syncing = false
+  }
+  
+  const insertBlock = async (db, block) => {
+    const height = parseInt(block.header.height, 10)
+    const time = block.header.time
+    
+    const num_txs = parseInt(block.header.num_txs, 10)
+    console.log("Block " + height + ": txs=" + num_txs)
+    if (num_txs > 0) {
+      const results = await queryTendermint('/block_results?height=' + height)
+      const txs = block.data.txs
+      for (var i=0; i<txs.length; i++) {
+        const txb64 = txs[i]
+        var bytes = Buffer.from(txb64, 'base64')
+        var hash = crypto.createHash('sha256').update(bytes).digest('hex')
+        const stdtx = unmarshalTx(bytes)
+        //console.log(JSON.stringify(stdtx, null, 2))
+        const res64 = results.results.DeliverTx[i]
+        //console.log(JSON.stringify(res64, null, 2))
+        if (res64.code === undefined) {
+          if (res64.data !== undefined) {
+            var result = JSON.parse(Buffer.from(res64.data, 'base64').toString())
+            //console.log(JSON.stringify(result, null, 2))
+          }
+          //console.log("Tx: " + stdtx.value.msg[0].type + " " + hash)
+          for (var j=0; j<res64.tags.length; j++) {
+            const tag = res64.tags[j]
+            const key = Buffer.from(tag.key, 'base64').toString()
+            const value = Buffer.from(tag.value, 'base64').toString()
+            //console.log("  '" + key + "': " + value)
+            if (key === "mtm.MarketTick") {
+              await addMarketTick(db, height, time, value, parseFloat(result.consensus.amount))
+            }
+          }
+        }
+      }
+    }
+    
+    const meta = await db.collection('meta').insertOne({ 
+      syncHeight: height,
+      syncTime: block.header.time
+    })
+  }
+  
+  const addMarketTick = async (db, height, time, market, consensus) => {
+    console.log("SLURP MarketTick: " + market + " " + consensus)
+    const counters = await db.collection('counters').find().next()
+    
+    await db.collection('ticks').insertOne({
+      index: counters.ticks++,
+      height: height,
+      time: time,
+      market: market,
+      consensus: consensus
+    })
+    const curs = await db.collection('ticks').find()
+    if (await curs.hasNext()) {
+      const doc = await curs.next()
+      if (height === doc.syncHeight + 1) {
+        return true
+      }
+    } 
+    
+    await db.collection('counters').insertOne({
+      ticks: counters.ticks
+    })
+  }
+  
+  queryMarketHistory = async (market, startblock, endblock, target) => {
+    const db = mongo.db(chainid)
+    //console.log("startblock=" + startblock)
+    //console.log("endblock=" + endblock)
+    //console.log("target=" + target)
+    const curs = await db.collection('ticks').find({
+      $and: [
+        { market: market },
+        { height: { $gte: startblock }},
+        { height: { $lte: endblock }}
+      ]
+    })
+    const total = await curs.count()
+    //console.log("total=" + total)
+    const skip = Math.floor(total / target) - 1
+    if (skip > 0) {
+      //console.log("skip=" + skip)
+      var res = []
+      while (await curs.hasNext()) {
+        res.push(await curs.next())
+        for (var i=0; i<skip; i++) {
+          if (await curs.hasNext()) await curs.next()
+        }
+      }
+    } else {
+      res = await curs.toArray()
+    }
+    return res
+  }
+  
+}
