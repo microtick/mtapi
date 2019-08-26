@@ -899,28 +899,39 @@ if (USE_MONGO) {
     //console.log("startblock=" + startblock)
     //console.log("endblock=" + endblock)
     //console.log("target=" + target)
-    const curs = await db.collection('ticks').find({
-      $and: [
-        { market: market },
-        { height: { $gte: startblock }},
-        { height: { $lte: endblock }}
-      ]
-    })
-    const total = await curs.count()
-    //console.log("total=" + total)
-    const skip = Math.floor(total / target) - 1
-    if (skip > 0) {
-      //console.log("skip=" + skip)
-      var res = []
-      while (await curs.hasNext()) {
-        res.push(await curs.next())
-        for (var i=0; i<skip; i++) {
-          if (await curs.hasNext()) await curs.next()
+    const curs = await db.collection('ticks').aggregate([
+      {
+        $match: {
+          $and: [
+            { market: market },
+            { height: { $gte: startblock }},
+            { height: { $lte: endblock }}
+          ]
+        }
+      },
+      {
+        $lookup: {
+          from: 'blocks',
+          localField: 'height',
+          foreignField: 'height',
+          as: 'time'
         }
       }
-    } else {
-      res = await curs.toArray()
-    }
+    ])
+    const hist = await curs.toArray()
+    const total = hist.length
+    //console.log("total=" + total)
+    const skip = Math.floor(total / target) - 1
+    const res = hist.reduce((acc, el, index) => {
+      if (skip === 0 || (index % skip) === 0) {
+        acc.push({
+          height: el.height,
+          time: el.time[0].time,
+          consensus: el.consensus
+        })
+      }
+      return acc
+    }, [])
     return res
   }
   
