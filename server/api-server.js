@@ -3,6 +3,7 @@ const protocol = require('../lib/protocol.js')
 const axios = require('axios')
 const objecthash = require('object-hash')
 const { marshalTx, unmarshalTx } = require('./amino.js')
+const config = require('./config.js')
 
 const USE_MONGO = true
 
@@ -16,11 +17,11 @@ process.on('unhandledRejection', error => {
 });
 
 // Subscriptions (websocket)
-const tendermint = "localhost:26657"
+const tendermint = config.tendermint
 
 // Transactions
 const NEWBLOCK = "tm.event='NewBlock'"
-const TXTIMEOUT = 30000
+const TXTIMEOUT = config.timeout
 const pending = {}
 
 // Caching
@@ -182,7 +183,7 @@ const queryCosmos = async path => {
 var connectionId = 1
 
 const server = new ws.Server({
-  port: 1320,
+  port: config.port,
 })
 
 server.on('connection', async client => {
@@ -579,7 +580,7 @@ if (USE_MONGO) {
     if (mongo !== null) {
       await mongo.close()
     }
-    mongodb.connect("mongodb://localhost:27017", { 
+    mongodb.connect(config.mongo, { 
       useNewUrlParser: true,
       useUnifiedTopology: true
     }, (err, client) => {
