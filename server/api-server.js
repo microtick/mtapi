@@ -2,10 +2,9 @@ const ws = require('ws')
 const protocol = require('../lib/protocol.js')
 const axios = require('axios')
 const objecthash = require('object-hash')
-const mongodb = require('mongodb').MongoClient
 const { marshalTx, unmarshalTx } = require('./amino.js')
 
-const USE_MONGO = false
+const USE_MONGO = true
 
 process.on('unhandledRejection', error => {
   if (error !== undefined) {
@@ -576,15 +575,23 @@ if (USE_MONGO) {
   var syncing = false
   var chainid
   
-  mongodb.connect("mongodb://localhost:27017", { 
-    useNewUrlParser: true,
-    useUnifiedTopology: true
-  }, (err, client) => {
-    if (err === null) {
-      console.log("Connected to MongoDB")
-      mongo = client
+  const reconnect = async () => {
+    if (mongo !== null) {
+      await mongo.close()
     }
-  })
+    mongodb.connect("mongodb://localhost:27017", { 
+      useNewUrlParser: true,
+      useUnifiedTopology: true
+    }, (err, client) => {
+      if (err === null) {
+        console.log("Connected to MongoDB")
+        mongo = client
+      }
+    })
+  }
+  
+  reconnect()
+  setInterval(reconnect, 300000) // close and reconnect every 5 minutes
   
   handleNewBlock = async obj => {
     chainid = obj.result.data.value.block.header.chain_id
@@ -596,18 +603,37 @@ if (USE_MONGO) {
       
       await db.createCollection('meta', { capped: true, max: 1, size: 4096 })
       await db.createCollection('counters', { capped: true, max: 1, size: 4096 })
+      await db.createCollection('blocks')
       await db.createCollection('ticks')
+      await db.createCollection('quotes')
+      await db.createCollection('books')
       
       const counters = await db.collection('counters')
       if (await counters.find().count() === 0) {
         await counters.insertOne({ 
-          ticks: 1
+          ticks: 1,
+          quotes: 1
         })
       }
       
-      const hasIndex = await db.collection('ticks').indexExists('history')
-      if (!hasIndex) {
-        console.log("Creating index")
+      const hasBlockIndex = await db.collection('blocks').indexExists('history')
+      if (!hasBlockIndex) {
+        console.log("Creating block index")
+        await db.collection('blocks').createIndex({
+          height: 1
+        }, {
+          name: 'history'
+        })
+        await db.collection('blocks').createIndex({
+          time: 1
+        }, {
+          name: 'time'
+        })
+      }
+      
+      const hasTickIndex = await db.collection('ticks').indexExists('history')
+      if (!hasTickIndex) {
+        console.log("Creating tick index")
         await db.collection('ticks').createIndex({
           index: 1,
           height: 1,
@@ -617,8 +643,29 @@ if (USE_MONGO) {
         })
       }
       
+      const hasQuoteIndex = await db.collection('quotes').indexExists('history')
+      if (!hasQuoteIndex) {
+        console.log("Creating quote index")
+        await db.collection('quotes').createIndex({
+          index: 1,
+          height: 1,
+          id: 1
+        }, {
+          name: 'history'
+        })
+      }
+      
+      const hasBookIndex = await db.collection('books').indexExists('history')
+      if (!hasBookIndex) {
+        console.log("Creating book index")
+        await db.collection('books').createIndex({
+          height: 1
+        }, {
+          name: 'history'
+        })
+      }
+      
       const synced = await isSynced(db, height)
-      //console.log("synced = " + synced)
       if (synced) {
         const block = await queryTendermint('/block?height=' + height)
         insertBlock(db, block.block)
@@ -645,16 +692,23 @@ if (USE_MONGO) {
     
     var block
     do {
-      const doc = await db.collection('meta').find().next()
-    
-      if (doc !== null) {
-        var curBlock = doc.syncHeight + 1
-      } else {
-        curBlock = 1
-      }
-      block = await queryTendermint('/block?height=' + curBlock)
-      if (block !== undefined) {
-        await insertBlock(db, block.block)
+      try {
+        const doc = await db.collection('meta').find().next()
+      
+        if (doc !== null) {
+          var curBlock = doc.syncHeight + 1
+        } else {
+          curBlock = 1
+        }
+        block = await queryTendermint('/block?height=' + curBlock)
+        if (block !== undefined) {
+          await insertBlock(db, block.block)
+        }
+      } catch (err) {
+        // try again... (could have reset the db connection while syncing)
+        console.log("error: " + err)
+        syncing = false
+        return
       }
     } while (block !== undefined)
     
@@ -664,7 +718,16 @@ if (USE_MONGO) {
   
   const insertBlock = async (db, block) => {
     const height = parseInt(block.header.height, 10)
-    const time = block.header.time
+    const time = Date.parse(block.header.time)
+    
+    db.collection('blocks').replaceOne({
+      height: height
+    }, {
+      height: height,
+      time: time
+    }, {
+      upsert: true
+    })
     
     const num_txs = parseInt(block.header.num_txs, 10)
     console.log("Block " + height + ": txs=" + num_txs)
@@ -693,6 +756,89 @@ if (USE_MONGO) {
             if (key === "mtm.MarketTick") {
               await addMarketTick(db, height, time, value, parseFloat(result.consensus.amount))
             }
+            if (key.startsWith("quote.")) {
+              console.log("quote event: " + value)
+              const id = parseInt(key.slice(6), 10)
+              if (value === "event.update") {
+                await addQuoteEvent(db, height, id, {
+                  spot: parseFloat(result.spot.amount),
+                  premium: parseFloat(result.premium.amount),
+                  active: true
+                })
+              } else if (value === "event.create") {
+                const spot = parseFloat(result.spot.amount)
+                const premium = parseFloat(result.premium.amount)
+                await addQuoteEvent(db, height, id, {
+                  spot: spot,
+                  premium: premium,
+                  create: true,
+                  market: result.market,
+                  duration: result.duration,
+                  active: true
+                })
+                var books = await db.collection('books').find({
+                  market: result.market, 
+                  duration: result.duration 
+                }).sort({height:-1}).next()
+                if (books === null) {
+                  books = {
+                    height: height,
+                    market: result.market,
+                    duration: result.duration,
+                    quotes: [ id ]
+                  }
+                } else {
+                  const quotes = books.quotes
+                  quotes.push(id)
+                  books = {
+                    height: height,
+                    market: result.market,
+                    duration: result.duration,
+                    quotes: quotes
+                  }
+                }
+                await db.collection('books').replaceOne({
+                  height: height,
+                  market: result.market,
+                  duration: result.duration
+                }, books, {
+                  upsert: true
+                })
+              } else if (value === "event.cancel" || value === "event.final") {
+                const quote = await db.collection('quotes').find({id:id,create:true}).next()
+                await addQuoteEvent(db, height, id, {
+                  destroy: true,
+                  active: false
+                })
+                var books = await db.collection('books').find({
+                  market: quote.market, 
+                  duration: quote.duration 
+                }).sort({height:-1}).next()
+                books = {
+                  height: height,
+                  market: quote.market,
+                  duration: quote.duration,
+                  quotes: books.quotes.filter(el => {
+                    if (el !== id) return true
+                    return false
+                  })
+                }
+                await db.collection('books').replaceOne({
+                  height: height,
+                  market: quote.market,
+                  duration: quote.duration
+                }, books, {
+                  upsert: true
+                })
+              } else if (value === "event.match") {
+                // do nothing
+              } else if (value === "event.deposit") {
+                // do nothing
+              } else {
+                console.log("need to handle: " + value)
+                process.exit()
+              }
+            }
           }
         }
       }
@@ -708,23 +854,42 @@ if (USE_MONGO) {
     console.log("SLURP MarketTick: " + market + " " + consensus)
     const counters = await db.collection('counters').find().next()
     
-    await db.collection('ticks').insertOne({
-      index: counters.ticks++,
+    const index = counters.ticks++
+    await db.collection('ticks').replaceOne({
+      index: index
+    }, {
+      index: index,
       height: height,
-      time: time,
       market: market,
       consensus: consensus
+    }, {
+      upsert: true
     })
-    const curs = await db.collection('ticks').find()
-    if (await curs.hasNext()) {
-      const doc = await curs.next()
-      if (height === doc.syncHeight + 1) {
-        return true
-      }
-    } 
     
     await db.collection('counters').insertOne({
-      ticks: counters.ticks
+      ticks: counters.ticks,
+      quotes: counters.quotes
+    })
+  }
+  
+  const addQuoteEvent = async (db, height, id, data) => {
+    console.log("SLURP quote event: " + id)
+    const counters = await db.collection('counters').find().next()
+    
+    const insertData = Object.assign({
+      index: counters.quotes++,
+      height: height,
+      id: id
+    }, data)
+    await db.collection('quotes').replaceOne({
+      index: insertData.index
+    }, insertData, {
+      upsert: true
+    })
+    
+    await db.collection('counters').insertOne({
+      ticks: counters.ticks,
+      quotes: counters.quotes
     })
   }
   
