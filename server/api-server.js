@@ -965,11 +965,13 @@ if (USE_MONGO) {
     const skip = Math.floor(total / target) - 1
     const res = hist.reduce((acc, el, index) => {
       if (skip === 0 || (index % skip) === 0) {
-        acc.push({
-          height: el.height,
-          time: el.time[0].time,
-          consensus: el.consensus
-        })
+        if (el.time[0] !== undefined) {
+          acc.push({
+            height: el.height,
+            time: el.time[0].time,
+            consensus: el.consensus
+          })
+        }
       }
       return acc
     }, [])
