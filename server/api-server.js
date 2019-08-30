@@ -27,6 +27,25 @@ const pending = {}
 // Caching
 var cache = {}
 
+const nextSequenceNumber = res => {
+  if (cache.nextSequenceNumber === undefined) {
+    cache.pendingSequenceNumber = parseInt(res.sequence, 10)
+    cache.queue = {}
+  } else {
+    res.sequence = cache.nextSequenceNumber.toString()
+  }
+  cache.nextSequenceNumber = parseInt(res.sequence, 10) + 1
+}
+
+setInterval(async () => {
+  if (cache === undefined || cache.queue === undefined || cache.pendingSequenceNumber === undefined) {
+    return
+  }
+  if (cache.queue[cache.pendingSequenceNumber] !== undefined) {
+    await cache.queue[cache.pendingSequenceNumber++].submit()
+  }
+}, 100)
+
 // One tendermint subscription per socket
 const tmsockets = {}
 // Added at subsciption time: mapping event -> []id
@@ -229,6 +248,7 @@ const handleMessage = async (env, name, payload) => {
   }
   
   var returnObj
+  var res
   try {
     switch (name) {
       case 'connect':
@@ -247,7 +267,7 @@ const handleMessage = async (env, name, payload) => {
           status: true
         }
       case 'blockinfo':
-        var res = await queryTendermint('/status')
+        res = await queryTendermint('/status')
         returnObj = {
           status: true,
           block: parseInt(res.sync_info.latest_block_height, 10),
@@ -326,14 +346,22 @@ const handleMessage = async (env, name, payload) => {
           history: res
         }
         break
+      case 'markethistory':
+        if (!USE_MONGO) throw new Error('No market tick DB')
+        res = await queryMarketHistory(payload.market, payload.startblock,
+          payload.endblock, payload.target)
+        return {
+          status: true,
+          history: res
+        }
       case 'createmarket':
         res = await queryCosmos("/microtick/generate/createmarket/" + 
           env.acct + "/" + payload.market)
+        nextSequenceNumber(res)
         return {
           status: true,
           msg: res
         }
-        break
       case 'createquote':
         res = await queryCosmos("/microtick/generate/createquote/" +
           env.acct + "/" + 
@@ -342,6 +370,7 @@ const handleMessage = async (env, name, payload) => {
           payload.backing + "/" + 
           payload.spot + "/" +
           payload.premium)
+        nextSequenceNumber(res)
         return {
           status: true,
           msg: res
@@ -350,6 +379,7 @@ const handleMessage = async (env, name, payload) => {
         res = await queryCosmos("/microtick/generate/cancelquote/" +
           env.acct + "/" + 
           payload.id)
+        nextSequenceNumber(res)
         return {
           status: true,
           msg: res
@@ -359,6 +389,7 @@ const handleMessage = async (env, name, payload) => {
           env.acct + "/" +
           payload.id + "/" + 
           payload.deposit)
+        nextSequenceNumber(res)
         return {
           status: true,
           msg: res
@@ -369,6 +400,7 @@ const handleMessage = async (env, name, payload) => {
           payload.id + "/" + 
           payload.newspot + "/" +
           payload.newpremium)
+        nextSequenceNumber(res)
         return {
           status: true,
           msg: res
@@ -380,6 +412,7 @@ const handleMessage = async (env, name, payload) => {
           payload.duration + "/" +
           payload.tradetype + "/" + 
           payload.quantity)
+        nextSequenceNumber(res)
         return {
           status: true,
           msg: res
@@ -392,6 +425,7 @@ const handleMessage = async (env, name, payload) => {
           payload.tradetype + "/" + 
           payload.limit + "/" +
           payload.maxcost)
+        nextSequenceNumber(res)
         return {
           status: true,
           msg: res
@@ -400,51 +434,58 @@ const handleMessage = async (env, name, payload) => {
         res = await queryCosmos("/microtick/generate/settletrade/" +
           env.acct + "/" +
           payload.id)
+        nextSequenceNumber(res)
         return {
           status: true,
           msg: res
         }
-      case 'markethistory':
-        if (!USE_MONGO) throw new Error('No market tick DB')
-        res = await queryMarketHistory(payload.market, payload.startblock,
-          payload.endblock, payload.target)
-        return {
-          status: true,
-          history: res
-        }
-      case 'posttx' :
-        const bytes = marshalTx(payload.tx)
-        //console.log(JSON.stringify(bytes))
-        const hex = Buffer.from(bytes).toString('hex')
-        //console.log("bytes=" + hex)
-        res = await queryTendermint('/broadcast_tx_sync?tx=0x' + hex)
-        const txres = await new Promise((resolve, reject) => {
-          const obj = {
-            success: txres => {
-              resolve(txres)
-            },
-            failure: err => {
-              reject(err)
-            },
-            timedout: false
-          }
-          setTimeout(() => {obj.timedout = true}, TXTIMEOUT)
-          pending[res.hash] = obj
-        })
-        if (txres.tx_result.data !== undefined) {
-          txres.tx_result.data = JSON.parse(Buffer.from(txres.tx_result.data, 'base64').toString())
-        }
-        if (txres.tx_result.tags !== undefined) {
-          txres.tx_result.tags = txres.tx_result.tags.map(t => {
-            return {
-              key: Buffer.from(t.key, 'base64').toString(),
-              value: Buffer.from(t.value, 'base64').toString()
+      case 'posttx':
+        res = await new Promise(async outerResolve => {
+          const pendingTx = {
+            submit: async () => {
+              
+              const bytes = marshalTx(payload.tx)
+              //console.log(JSON.stringify(bytes))
+              const hex = Buffer.from(bytes).toString('hex')
+              //console.log("bytes=" + hex)
+              res = await queryTendermint('/broadcast_tx_sync?tx=0x' + hex)
+              const txres = await new Promise((resolve, reject) => {
+                const obj = {
+                  success: txres => {
+                    resolve(txres)
+                  },
+                  failure: err => {
+                    reject(err)
+                  },
+                  timedout: false
+                }
+                setTimeout(() => {obj.timedout = true}, TXTIMEOUT)
+                console.log("hash=" + res.hash)
+                pending[res.hash] = obj
+              })
+              if (txres.tx_result.data !== undefined) {
+                txres.tx_result.data = JSON.parse(Buffer.from(txres.tx_result.data, 'base64').toString())
+              }
+              if (txres.tx_result.tags !== undefined) {
+                txres.tx_result.tags = txres.tx_result.tags.map(t => {
+                  return {
+                    key: Buffer.from(t.key, 'base64').toString(),
+                    value: Buffer.from(t.value, 'base64').toString()
+                  }
+                })
+              }
+        
+              outerResolve(txres)
             }
-          })
-        }
+          }
+          if (cache.queue === undefined) {
+            cache.queue = {}
+          }
+          cache.queue[parseInt(payload.sequence, 10)] = pendingTx
+        })
         return {
           status: true,
-          info: txres
+          info: res
         }
     }
     

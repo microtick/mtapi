@@ -334,7 +334,8 @@ class API {
       chain_id: msg.chainId
     })
     const res = await this.protocol.newMessage('posttx', {
-      tx: signed
+      tx: signed,
+      sequence: msg.sequence
     })
     //console.log("res=" + JSON.stringify(res, null, 2))
     if (!res.status) {
