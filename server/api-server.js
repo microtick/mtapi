@@ -160,7 +160,7 @@ const sendEvent = (event, payload) => {
         pending[hash].timedout = true
       }
       if (pending[hash].timedout) {
-        console.log("Deleting pending TX: " + hash)
+        //console.log("Deleting pending TX: " + hash)
         delete pending[hash]
       }
     })
@@ -235,7 +235,7 @@ const queue = new protocol(10000, async (env, name, payload) => {
 })
 
 const handleMessage = async (env, name, payload) => {
-  console.log("  COMMAND " + env.id + " " + name + " " + JSON.stringify(payload))
+  //console.log("  COMMAND " + env.id + " " + name + " " + JSON.stringify(payload))
   
   const hash = objecthash({
     name: name,
@@ -243,7 +243,7 @@ const handleMessage = async (env, name, payload) => {
   }) 
   
   if (cache[hash] !== undefined) {
-    console.log("Responding from cache: " + hash)
+    //console.log("Responding from cache: " + hash)
     return cache[hash]
   }
   
@@ -460,7 +460,6 @@ const handleMessage = async (env, name, payload) => {
                   timedout: false
                 }
                 setTimeout(() => {obj.timedout = true}, TXTIMEOUT)
-                console.log("hash=" + res.hash)
                 pending[res.hash] = obj
               })
               if (txres.tx_result.data !== undefined) {
@@ -566,7 +565,7 @@ const doHistory = async (query, fromBlock, toBlock, whichTags) => {
       
     } while (count < total_count)
     
-    console.log("cache range " + query + "=[" + cache.startBlock + "," + cache.endBlock + "]")
+    //console.log("cache range " + query + "=[" + cache.startBlock + "," + cache.endBlock + "]")
     
     return history
     
@@ -799,7 +798,7 @@ if (USE_MONGO) {
               await addMarketTick(db, height, time, value, parseFloat(result.consensus.amount))
             }
             if (key.startsWith("quote.")) {
-              console.log("quote event: " + value)
+              //console.log("quote event: " + value)
               const id = parseInt(key.slice(6), 10)
               if (value === "event.update") {
                 await addQuoteEvent(db, height, id, {
@@ -893,7 +892,7 @@ if (USE_MONGO) {
   }
   
   const addMarketTick = async (db, height, time, market, consensus) => {
-    console.log("SLURP MarketTick: " + market + " " + consensus)
+    //console.log("SLURP MarketTick: " + market + " " + consensus)
     const counters = await db.collection('counters').find().next()
     
     const index = counters.ticks++
@@ -915,7 +914,7 @@ if (USE_MONGO) {
   }
   
   const addQuoteEvent = async (db, height, id, data) => {
-    console.log("SLURP quote event: " + id)
+    //console.log("SLURP quote event: " + id)
     const counters = await db.collection('counters').find().next()
     
     const insertData = Object.assign({
