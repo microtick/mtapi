@@ -898,9 +898,9 @@ if (USE_MONGO) {
               const id = parseInt(key.slice(6), 10)
               //console.log("trade event: " + value)
               if (value === "event.create") {
-                addTradeEvent(db, height, id, result)
+                await addTradeEvent(db, height, id, result)
               } else if (value === "event.settle") {
-                addTradeEvent(db, height, id, result)
+                await addTradeEvent(db, height, id, result)
               } else {
                 console.log("need to handle: " + value)
                 process.exit()
