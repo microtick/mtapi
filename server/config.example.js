@@ -3,5 +3,4 @@ module.exports = {
     mongo: "mongodb://localhost:27017",
     timeout: 30000,
     port: 1320,
-    
 }
