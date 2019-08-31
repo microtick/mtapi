@@ -647,13 +647,15 @@ if (USE_MONGO) {
       await db.createCollection('blocks')
       await db.createCollection('ticks')
       await db.createCollection('quotes')
+      await db.createCollection('trades')
       await db.createCollection('books')
       
       const counters = await db.collection('counters')
       if (await counters.find().count() === 0) {
         await counters.insertOne({ 
           ticks: 1,
-          quotes: 1
+          quotes: 1,
+          trades: 1
         })
       }
       
@@ -688,6 +690,18 @@ if (USE_MONGO) {
       if (!hasQuoteIndex) {
         console.log("Creating quote index")
         await db.collection('quotes').createIndex({
+          index: 1,
+          height: 1,
+          id: 1
+        }, {
+          name: 'history'
+        })
+      }
+      
+      const hasTradeIndex = await db.collection('trades').indexExists('history')
+      if (!hasTradeIndex) {
+        console.log("Creating trade index")
+        await db.collection('trades').createIndex({
           index: 1,
           height: 1,
           id: 1
@@ -880,6 +894,18 @@ if (USE_MONGO) {
                 process.exit()
               }
             }
+            if (key.startsWith("trade.")) {
+              const id = parseInt(key.slice(6), 10)
+              //console.log("trade event: " + value)
+              if (value === "event.create") {
+                addTradeEvent(db, height, id, result)
+              } else if (value === "event.settle") {
+                addTradeEvent(db, height, id, result)
+              } else {
+                console.log("need to handle: " + value)
+                process.exit()
+              }
+            }
           }
         }
       }
@@ -909,7 +935,8 @@ if (USE_MONGO) {
     
     await db.collection('counters').insertOne({
       ticks: counters.ticks,
-      quotes: counters.quotes
+      quotes: counters.quotes,
+      trades: counters.trades
     })
   }
   
@@ -930,7 +957,29 @@ if (USE_MONGO) {
     
     await db.collection('counters').insertOne({
       ticks: counters.ticks,
-      quotes: counters.quotes
+      quotes: counters.quotes,
+      trades: counters.trades
+    })
+  }
+  
+  const addTradeEvent = async (db, height, id, data) => {
+    const counters = await db.collection('counters').find().next()
+    
+    const insertData = Object.assign({
+      index: counters.trades++,
+      height: height,
+      id: id
+    }, data)
+    await db.collection('trades').replaceOne({
+      index: insertData.index
+    }, insertData, {
+      upsert: true
+    })
+    
+    await db.collection('counters').insertOne({
+      ticks: counters.ticks,
+      quotes: counters.quotes,
+      trades: counters.trades
     })
   }
   
