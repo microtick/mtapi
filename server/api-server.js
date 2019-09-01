@@ -92,6 +92,9 @@ const subscribe = (id, event) => {
       })
       if (USE_MONGO && event === NEWBLOCK && obj.result.data !== undefined) {
         handleNewBlock(obj)
+      } else if (event === NEWBLOCK && obj.result.data !== undefined) {
+        const height = parseInt(obj.result.data.value.block.header.height, 10)
+        console.log("Block: " + height)
       }
     })
 
