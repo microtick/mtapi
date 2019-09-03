@@ -619,6 +619,8 @@ if (USE_MONGO) {
   var syncing = false
   var chainid
   
+  var do_reconnect = false
+  
   const reconnect = async () => {
     if (mongo !== null) {
       await mongo.close()
@@ -635,12 +637,21 @@ if (USE_MONGO) {
   }
   
   reconnect()
-  setInterval(reconnect, 300000) // close and reconnect every 5 minutes
+  
+  setInterval(() => {
+    do_reconnect = true
+  }, 300000) // close and flag reconnect every 5 minutes
   
   handleNewBlock = async obj => {
     chainid = obj.result.data.value.block.header.chain_id
     const height = parseInt(obj.result.data.value.block.header.height, 10)
     //console.log(JSON.stringify(obj, null, 2))
+    
+    // Handle reconnect inline to prevent stepping on DB operations
+    if (do_reconnect) {
+      do_reconnect = false
+      await reconnect()
+    }
     
     if (mongo !== null && mongo.isConnected()) {
       const db = mongo.db(chainid)
