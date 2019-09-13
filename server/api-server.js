@@ -1024,7 +1024,7 @@ if (USE_MONGO) {
     const hist = await curs.toArray()
     const total = hist.length
     //console.log("total=" + total)
-    const skip = Math.floor(total / target) - 1
+    const skip = Math.floor(total / target)
     const res = hist.reduce((acc, el, index) => {
       if (skip === 0 || (index % skip) === 0) {
         if (el.time[0] !== undefined) {
