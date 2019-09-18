@@ -519,7 +519,7 @@ const formatTx = (tx, whichTags) => {
     tx.tx_result.tags.map(tag => {
       whichTags.map(which => {
         const key = Buffer.from(tag.key, "base64").toString()
-        if (which === key) {
+        if (which === key && tag.value !== undefined) {
           data.tags[key] = Buffer.from(tag.value, "base64").toString()
         }
       })
@@ -820,7 +820,9 @@ if (USE_MONGO) {
           for (var j=0; j<res64.tags.length; j++) {
             const tag = res64.tags[j]
             const key = Buffer.from(tag.key, 'base64').toString()
-            const value = Buffer.from(tag.value, 'base64').toString()
+            if (tag.value !== undefined) {
+              var value = Buffer.from(tag.value, 'base64').toString()
+            }
             //console.log("  '" + key + "': " + value)
             if (key === "mtm.MarketTick") {
               await addMarketTick(db, height, time, value, parseFloat(result.consensus.amount))
