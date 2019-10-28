@@ -526,7 +526,14 @@ const handleMessage = async (env, name, payload) => {
               queue: {}
             }
           }
-          cache.accounts[env.acct].queue[parseInt(payload.sequence, 10)] = pendingTx
+          const seq = parseInt(payload.sequence, 10)
+          cache.accounts[env.acct].queue[seq] = pendingTx
+          if (cache.accounts[env.acct].pendingSequenceNumber === undefined) {
+            cache.accounts[env.acct].pendingSequenceNumber = seq
+          }
+          if (cache.accounts[env.acct].nextSequenceNumber === undefined) {
+            cache.accounts[env.acct].pendingSequenceNumber + 1
+          }
         })
         return {
           status: true,
