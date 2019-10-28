@@ -56,7 +56,9 @@ setInterval(async () => {
     }
     if (pool.queue[pool.pendingSequenceNumber] !== undefined) {
       console.log("Submitting TX: " + acct + ": sequence=" + pool.pendingSequenceNumber)
-      await pool.queue[pool.pendingSequenceNumber++].submit()
+      await pool.queue[pool.pendingSequenceNumber].submit()
+      delete pool.queue[pool.pendingSequenceNumber]
+      pool.pendingSequenceNumber++
     }
   })
 }, 100)
@@ -160,7 +162,23 @@ const sendEvent = (event, payload) => {
     console.log("Block")
     
     // Reset cache
-    cache = {}
+    const oldcache = cache
+    
+    cache = {
+      accounts: {}
+    }
+    
+    if (oldcache.accounts !== undefined) {
+      const keys = Object.keys(oldcache.accounts)
+      for (var i=0; i<keys.length; i++) {
+        const key = keys[i]
+        if (Object.keys(oldcache.accounts[key].queue).length > 0) {
+          console.log("Copying cache for acct: " + key)
+          console.log(JSON.stringify(oldcache.accounts[key], null, 2))
+          cache.accounts[key] = oldcache.accounts[key]
+        }
+      }
+    }
     
     // Check pending Tx hashes
     const hashes = Object.keys(pending)
@@ -173,7 +191,7 @@ const sendEvent = (event, payload) => {
       if (res.data.error !== undefined) {
         console.log("TX error: " + hash + " " + JSON.stringify(res.data.error))
         pending[hash].failure(res.data.error)
-        pending[hash].timedout = true
+        //pending[hash].timedout = true
       } else if (res.data.result !== undefined) {
         console.log("TX success: " + hash)
         pending[hash].success(res.data.result)
