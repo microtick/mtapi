@@ -174,7 +174,6 @@ const sendEvent = (event, payload) => {
         const key = keys[i]
         if (Object.keys(oldcache.accounts[key].queue).length > 0) {
           console.log("Copying cache for acct: " + key)
-          console.log(JSON.stringify(oldcache.accounts[key], null, 2))
           cache.accounts[key] = oldcache.accounts[key]
         }
       }
