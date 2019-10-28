@@ -5,7 +5,7 @@ const objecthash = require('object-hash')
 const { marshalTx, unmarshalTx } = require('./amino.js')
 const config = require('./config.js')
 
-const USE_MONGO = true
+const USE_MONGO = false
 
 process.on('unhandledRejection', error => {
   if (error !== undefined) {
@@ -156,7 +156,7 @@ const sendEvent = (event, payload) => {
       if (res.data.error !== undefined) {
         console.log("TX error: " + hash + " " + JSON.stringify(res.data.error))
         pending[hash].failure(res.data.error)
-        pending[hash].timedout = true
+        //pending[hash].timedout = true
       } else if (res.data.result !== undefined) {
         console.log("TX success: " + hash)
         pending[hash].success(res.data.result)
