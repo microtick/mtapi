@@ -27,23 +27,38 @@ const pending = {}
 // Caching
 var cache = {}
 
-const nextSequenceNumber = res => {
-  if (cache.nextSequenceNumber === undefined) {
-    cache.pendingSequenceNumber = parseInt(res.sequence, 10)
-    cache.queue = {}
-  } else {
-    res.sequence = cache.nextSequenceNumber.toString()
+const nextSequenceNumber = (acct, res) => {
+  if (cache.accounts === undefined) {
+    cache.accounts = {}
   }
-  cache.nextSequenceNumber = parseInt(res.sequence, 10) + 1
+  if (cache.accounts[acct] === undefined) {
+    cache.accounts[acct] = {}
+  }
+  if (cache.accounts[acct].nextSequenceNumber === undefined) {
+    cache.accounts[acct].pendingSequenceNumber = parseInt(res.sequence, 10)
+    cache.accounts[acct].queue = {}
+  } else {
+    res.sequence = cache.accounts[acct].nextSequenceNumber.toString()
+  }
+  cache.accounts[acct].nextSequenceNumber = parseInt(res.sequence, 10) + 1
+  console.log("Generating TX: " + acct + ": sequence=" + res.sequence)
 }
 
 setInterval(async () => {
-  if (cache === undefined || cache.queue === undefined || cache.pendingSequenceNumber === undefined) {
+  if (cache === undefined || cache.accounts === undefined) {
     return
   }
-  if (cache.queue[cache.pendingSequenceNumber] !== undefined) {
-    await cache.queue[cache.pendingSequenceNumber++].submit()
-  }
+  const accts = Object.keys(cache.accounts)
+  accts.map(async acct => {
+    const pool = cache.accounts[acct]
+    if (pool.queue === undefined || pool.pendingSequenceNumber === undefined) {
+      return
+    }
+    if (pool.queue[pool.pendingSequenceNumber] !== undefined) {
+      console.log("Submitting TX: " + acct + ": sequence=" + pool.pendingSequenceNumber)
+      await pool.queue[pool.pendingSequenceNumber++].submit()
+    }
+  })
 }, 100)
 
 // One tendermint subscription per socket
@@ -94,7 +109,7 @@ const subscribe = (id, event) => {
         handleNewBlock(obj)
       } else if (event === NEWBLOCK && obj.result.data !== undefined) {
         const height = parseInt(obj.result.data.value.block.header.height, 10)
-        console.log("Block: " + height)
+        //console.log("Block: " + height)
       }
     })
 
@@ -142,6 +157,8 @@ const unsubscribe = (id, event) => {
 
 const sendEvent = (event, payload) => {
   if (event === NEWBLOCK) {
+    console.log("Block")
+    
     // Reset cache
     cache = {}
     
@@ -156,7 +173,7 @@ const sendEvent = (event, payload) => {
       if (res.data.error !== undefined) {
         console.log("TX error: " + hash + " " + JSON.stringify(res.data.error))
         pending[hash].failure(res.data.error)
-        //pending[hash].timedout = true
+        pending[hash].timedout = true
       } else if (res.data.result !== undefined) {
         console.log("TX success: " + hash)
         pending[hash].success(res.data.result)
@@ -169,7 +186,7 @@ const sendEvent = (event, payload) => {
     })
   }
   if (subscriptions[event] === undefined) return
-  const msg = queue.createEvent(event, payload)
+  const msg = apiProtocolQueue.createEvent(event, payload)
   subscriptions[event].map(id => {
     const client = clients[id]
     if (client !== undefined) {
@@ -218,7 +235,7 @@ server.on('connection', async client => {
   clients[env.id] = client
   
   client.on('message', async msg => {
-    const response = await queue.process(env, msg)
+    const response = await apiProtocolQueue.process(env, msg)
     if (response !== undefined) {
       client.send(response)
     }
@@ -233,7 +250,7 @@ server.on('connection', async client => {
   
 })
 
-const queue = new protocol(10000, async (env, name, payload) => {
+const apiProtocolQueue = new protocol(10000, async (env, name, payload) => {
   return await handleMessage(env, name, payload)
 })
 
@@ -360,7 +377,7 @@ const handleMessage = async (env, name, payload) => {
       case 'createmarket':
         res = await queryCosmos("/microtick/generate/createmarket/" + 
           env.acct + "/" + payload.market)
-        nextSequenceNumber(res)
+        nextSequenceNumber(env.acct, res)
         return {
           status: true,
           msg: res
@@ -373,7 +390,7 @@ const handleMessage = async (env, name, payload) => {
           payload.backing + "/" + 
           payload.spot + "/" +
           payload.premium)
-        nextSequenceNumber(res)
+        nextSequenceNumber(env.acct, res)
         return {
           status: true,
           msg: res
@@ -382,7 +399,7 @@ const handleMessage = async (env, name, payload) => {
         res = await queryCosmos("/microtick/generate/cancelquote/" +
           env.acct + "/" + 
           payload.id)
-        nextSequenceNumber(res)
+        nextSequenceNumber(env.acct, res)
         return {
           status: true,
           msg: res
@@ -392,7 +409,7 @@ const handleMessage = async (env, name, payload) => {
           env.acct + "/" +
           payload.id + "/" + 
           payload.deposit)
-        nextSequenceNumber(res)
+        nextSequenceNumber(env.acct, res)
         return {
           status: true,
           msg: res
@@ -403,7 +420,7 @@ const handleMessage = async (env, name, payload) => {
           payload.id + "/" + 
           payload.newspot + "/" +
           payload.newpremium)
-        nextSequenceNumber(res)
+        nextSequenceNumber(env.acct, res)
         return {
           status: true,
           msg: res
@@ -415,7 +432,7 @@ const handleMessage = async (env, name, payload) => {
           payload.duration + "/" +
           payload.tradetype + "/" + 
           payload.quantity)
-        nextSequenceNumber(res)
+        nextSequenceNumber(env.acct, res)
         return {
           status: true,
           msg: res
@@ -428,7 +445,7 @@ const handleMessage = async (env, name, payload) => {
           payload.tradetype + "/" + 
           payload.limit + "/" +
           payload.maxcost)
-        nextSequenceNumber(res)
+        nextSequenceNumber(env.acct, res)
         return {
           status: true,
           msg: res
@@ -437,7 +454,7 @@ const handleMessage = async (env, name, payload) => {
         res = await queryCosmos("/microtick/generate/settletrade/" +
           env.acct + "/" +
           payload.id)
-        nextSequenceNumber(res)
+        nextSequenceNumber(env.acct, res)
         return {
           status: true,
           msg: res
@@ -445,13 +462,17 @@ const handleMessage = async (env, name, payload) => {
       case 'posttx':
         res = await new Promise(async outerResolve => {
           const pendingTx = {
+            submitted: false,
             submit: async () => {
+              if (pendingTx.submitted) return
+              pendingTx.submitted = true
               
               const bytes = marshalTx(payload.tx)
               //console.log(JSON.stringify(bytes))
               const hex = Buffer.from(bytes).toString('hex')
               //console.log("bytes=" + hex)
               res = await queryTendermint('/broadcast_tx_sync?tx=0x' + hex)
+              console.log("  Hash=" + res.hash)
               const txres = await new Promise((resolve, reject) => {
                 const obj = {
                   success: txres => {
@@ -480,10 +501,15 @@ const handleMessage = async (env, name, payload) => {
               outerResolve(txres)
             }
           }
-          if (cache.queue === undefined) {
-            cache.queue = {}
+          if (cache.accounts === undefined) {
+            cache.accounts = {}
           }
-          cache.queue[parseInt(payload.sequence, 10)] = pendingTx
+          if (cache.accounts[env.acct] === undefined) {
+            cache.accounts[env.acct] = {
+              queue: {}
+            }
+          }
+          cache.accounts[env.acct].queue[parseInt(payload.sequence, 10)] = pendingTx
         })
         return {
           status: true,
@@ -799,7 +825,7 @@ if (USE_MONGO) {
     })
     
     const num_txs = parseInt(block.header.num_txs, 10)
-    console.log("Block " + height + ": txs=" + num_txs)
+    //console.log("Block " + height + ": txs=" + num_txs)
     if (num_txs > 0) {
       const results = await queryTendermint('/block_results?height=' + height)
       const txs = block.data.txs
@@ -1026,7 +1052,8 @@ if (USE_MONGO) {
     const hist = await curs.toArray()
     const total = hist.length
     //console.log("total=" + total)
-    const skip = Math.floor(total / target)
+    //console.log("target=" + target)
+    const skip = Math.floor(total / target) 
     const res = hist.reduce((acc, el, index) => {
       if (skip === 0 || (index % skip) === 0) {
         if (el.time[0] !== undefined) {
@@ -1039,6 +1066,7 @@ if (USE_MONGO) {
       }
       return acc
     }, [])
+    //console.log("reduced=" + res.length)
     return res
   }
   
