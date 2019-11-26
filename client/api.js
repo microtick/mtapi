@@ -47,22 +47,27 @@ class API {
     }, (env, name, payload) => {
       //console.log("Event: " + name)
       //console.log(JSON.stringify(payload, null, 2))
-      const tags = {}
+      const events = {}
       if (name === "tm.event='NewBlock'") {
         var data = payload
       } else {
         data = JSON.parse(Buffer.from(payload.data.value.TxResult.result.data, 'base64').toString())
         data.block = payload.data.value.TxResult.height
-        payload.data.value.TxResult.result.tags.map(tag => {
-          const key = Buffer.from(tag.key, 'base64').toString()
-          tags[key] = Buffer.from(tag.value, 'base64').toString()
+        payload.data.value.TxResult.result.events.map(event => {
+          if (event.type === "message") {
+            event.attributes.map(a => {
+              const key = Buffer.from(a.key, 'base64').toString()
+              events[key] = Buffer.from(a.value, 'base64').toString()
+              return null
+            })
+          }
           return null
         })
       }
       if (this.subscriptions[name] !== undefined) {
         this.subscriptions[name] = this.subscriptions[name].reduce((acc, id) => {
           if (this.submap[id] !== undefined) {
-            this.submap[id].cb(data, tags)
+            this.submap[id].cb(data, events) 
             acc.push(id)
           }
           return acc
@@ -278,14 +283,14 @@ class API {
     return response.info
   }
   
-  async history(query, fromBlock, toBlock, whichTags) {
+  async history(query, fromBlock, toBlock, whichEvents) {
     if (fromBlock < 0) fromBlock = 0
     if (toBlock < fromBlock) toBlock = fromBlock
     const response = await this.protocol.newMessage('history', {
       query: query,
       from: fromBlock,
       to: toBlock,
-      tags: whichTags
+      events: whichEvents
     })
     if (!response.status) {
       throw new Error("Get history failed: " + response.error)

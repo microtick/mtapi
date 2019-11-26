@@ -5,7 +5,7 @@ const objecthash = require('object-hash')
 const { marshalTx, unmarshalTx } = require('./amino.js')
 const config = require('./config.js')
 
-const USE_MONGO = false
+const USE_MONGO = true
 
 process.on('unhandledRejection', error => {
   if (error !== undefined) {
@@ -41,7 +41,6 @@ const nextSequenceNumber = (acct, res) => {
     res.sequence = cache.accounts[acct].nextSequenceNumber.toString()
   }
   cache.accounts[acct].nextSequenceNumber = parseInt(res.sequence, 10) + 1
-  console.log("Generating TX: " + acct + ": sequence=" + res.sequence)
 }
 
 setInterval(async () => {
@@ -55,8 +54,7 @@ setInterval(async () => {
       return
     }
     if (pool.queue[pool.pendingSequenceNumber] !== undefined) {
-      console.log("Submitting TX: " + acct + ": sequence=" + pool.pendingSequenceNumber)
-      await pool.queue[pool.pendingSequenceNumber].submit()
+      await pool.queue[pool.pendingSequenceNumber].submit(acct, pool.pendingSequenceNumber)
       delete pool.queue[pool.pendingSequenceNumber]
       pool.pendingSequenceNumber++
     }
@@ -188,9 +186,11 @@ const sendEvent = (event, payload) => {
       const url = "http://" + tendermint + "/tx?hash=0x" + hash
       const res = await axios.get(url)
       if (res.data.error !== undefined) {
-        console.log("TX error: " + hash + " " + JSON.stringify(res.data.error))
-        pending[hash].failure(res.data.error)
-        //pending[hash].timedout = true
+        pending[hash].tries++
+        if (pending[hash].tries > 2) {
+          console.log("TX error: " + hash + " " + JSON.stringify(res.data.error))
+          pending[hash].failure(res.data.error)
+        }
       } else if (res.data.result !== undefined) {
         console.log("TX success: " + hash)
         pending[hash].success(res.data.result)
@@ -225,13 +225,18 @@ const queryTendermint = async url => {
 const queryCosmos = async path => {
   const query = "http://" + tendermint + '/abci_query?path="/custom' + path + '"'
   const res = await axios.get(query)
-  if (res.data.result.response.code !== undefined) {
-    console.log("query=" + query)
+  if (res.data.result.response.code !== 0) {
+    //console.log("query=" + query)
+    //console.log(JSON.stringify(res.data, null, 2))
     const obj = JSON.parse(res.data.result.response.log)
     throw new Error(obj.message)
   }
-  const data = Buffer.from(res.data.result.response.value, 'base64')
-  return JSON.parse(data.toString())
+  if (res.data.result.response.value === null) {
+    throw new Error("Received null response")
+  } else {
+    const data = Buffer.from(res.data.result.response.value, 'base64')
+    return JSON.parse(data.toString())
+  }
 }
 
 // Server
@@ -239,6 +244,7 @@ const queryCosmos = async path => {
 var connectionId = 1
 
 const server = new ws.Server({
+  host: config.host,
   port: config.port,
 })
 
@@ -362,7 +368,7 @@ const handleMessage = async (env, name, payload) => {
         }
         break
       case 'history':
-        res = await doHistory(payload.query, payload.from, payload.to, payload.tags)
+        res = await doHistory(payload.query, payload.from, payload.to, payload.events)
         returnObj = {
           status: true,
           history: res
@@ -480,8 +486,9 @@ const handleMessage = async (env, name, payload) => {
         res = await new Promise(async outerResolve => {
           const pendingTx = {
             submitted: false,
-            submit: async () => {
+            submit: async (acct, sequence) => {
               if (pendingTx.submitted) return
+              console.log("Submitting TX: " + acct + ": sequence=" + sequence) 
               pendingTx.submitted = true
               
               const bytes = marshalTx(payload.tx)
@@ -489,7 +496,6 @@ const handleMessage = async (env, name, payload) => {
               const hex = Buffer.from(bytes).toString('hex')
               //console.log("bytes=" + hex)
               res = await queryTendermint('/broadcast_tx_sync?tx=0x' + hex)
-              console.log("  Hash=" + res.hash)
               const txres = await new Promise((resolve, reject) => {
                 const obj = {
                   success: txres => {
@@ -498,21 +504,28 @@ const handleMessage = async (env, name, payload) => {
                   failure: err => {
                     reject(err)
                   },
-                  timedout: false
+                  timedout: false,
+                  tries: 0
                 }
                 setTimeout(() => {obj.timedout = true}, TXTIMEOUT)
+                console.log("  hash=" + res.hash)
                 pending[res.hash] = obj
               })
-              if (txres.tx_result.data !== undefined) {
+              if (txres.tx_result.data !== null) {
                 txres.tx_result.data = JSON.parse(Buffer.from(txres.tx_result.data, 'base64').toString())
               }
-              if (txres.tx_result.tags !== undefined) {
-                txres.tx_result.tags = txres.tx_result.tags.map(t => {
-                  return {
-                    key: Buffer.from(t.key, 'base64').toString(),
-                    value: Buffer.from(t.value, 'base64').toString()
+              if (txres.tx_result.events !== undefined) {
+                for (var i=0; i<txres.tx_result.events.length; i++) {
+                  var t = txres.tx_result.events[i]
+                  if (t.type === "message") {
+                    t.attributes = t.attributes.map(a => {
+                      return {
+                        key: Buffer.from(a.key, 'base64').toString(),
+                        value: Buffer.from(a.value, 'base64').toString()
+                      }
+                    })
                   }
-                })
+                }
               }
         
               outerResolve(txres)
@@ -555,22 +568,22 @@ const handleMessage = async (env, name, payload) => {
   }
 }
 
-const formatTx = (tx, whichTags) => {
+const formatTx = (tx, whichEvents) => {
   const height = parseInt(tx.height, 10)
   
   var data = {}
-  data.tags = {}
+  data.events = {}
   if (tx.tx_result.data !== undefined) {
     const str = Buffer.from(tx.tx_result.data, "base64").toString()
     const json = JSON.parse(str)
     data = Object.assign(data, json)
   }
-  if (whichTags != null && tx.tx_result.tags !== undefined) {
-    tx.tx_result.tags.map(tag => {
-      whichTags.map(which => {
-        const key = Buffer.from(tag.key, "base64").toString()
-        if (which === key && tag.value !== undefined) {
-          data.tags[key] = Buffer.from(tag.value, "base64").toString()
+  if (whichEvents != null && tx.tx_result.events !== undefined) {
+    tx.tx_result.events.map(event => {
+      whichEvents.map(which => {
+        const key = Buffer.from(event.key, "base64").toString()
+        if (which === key && event.value !== undefined) {
+          data.events[key] = Buffer.from(event.value, "base64").toString()
         }
       })
     })
@@ -582,7 +595,7 @@ const formatTx = (tx, whichTags) => {
   return data
 }
 
-const doHistory = async (query, fromBlock, toBlock, whichTags) => {
+const doHistory = async (query, fromBlock, toBlock, whichEvents) => {
   var page = 0
   var count = 0
   const perPage = 100
@@ -611,7 +624,7 @@ const doHistory = async (query, fromBlock, toBlock, whichTags) => {
       //console.log("txs.length=" + txs.length)
       
       for (var i=0; i<txs.length; i++) {
-        const data = formatTx(txs[i], whichTags)
+        const data = formatTx(txs[i], whichEvents)
         data.index = count++
         history.push(data)
       } 
@@ -857,120 +870,123 @@ if (USE_MONGO) {
         const txb64 = txs[i]
         var bytes = Buffer.from(txb64, 'base64')
         var hash = crypto.createHash('sha256').update(bytes).digest('hex')
-        const stdtx = unmarshalTx(bytes)
+        //const stdtx = unmarshalTx(bytes)
         //console.log(JSON.stringify(stdtx, null, 2))
-        const res64 = results.results.DeliverTx[i]
-        //console.log(JSON.stringify(res64, null, 2))
-        if (res64.code === undefined) {
-          if (res64.data !== undefined) {
+        const res64 = results.results.deliver_tx[i]
+        if (res64.code === 0) {
+          if (res64.data !== null) {
             var result = JSON.parse(Buffer.from(res64.data, 'base64').toString())
             //console.log(JSON.stringify(result, null, 2))
           }
           //console.log("Tx: " + stdtx.value.msg[0].type + " " + hash)
-          for (var j=0; j<res64.tags.length; j++) {
-            const tag = res64.tags[j]
-            const key = Buffer.from(tag.key, 'base64').toString()
-            if (tag.value !== undefined) {
-              var value = Buffer.from(tag.value, 'base64').toString()
-            }
-            //console.log("  '" + key + "': " + value)
-            if (key === "mtm.MarketTick") {
-              await addMarketTick(db, height, time, value, parseFloat(result.consensus.amount))
-            }
-            if (key.startsWith("quote.")) {
-              //console.log("quote event: " + value)
-              const id = parseInt(key.slice(6), 10)
-              if (value === "event.update") {
-                await addQuoteEvent(db, height, id, {
-                  spot: parseFloat(result.spot.amount),
-                  premium: parseFloat(result.premium.amount),
-                  active: true
-                })
-              } else if (value === "event.create") {
-                const spot = parseFloat(result.spot.amount)
-                const premium = parseFloat(result.premium.amount)
-                await addQuoteEvent(db, height, id, {
-                  spot: spot,
-                  premium: premium,
-                  create: true,
-                  market: result.market,
-                  duration: result.duration,
-                  active: true
-                })
-                var books = await db.collection('books').find({
-                  market: result.market, 
-                  duration: result.duration 
-                }).sort({height:-1}).next()
-                if (books === null) {
-                  books = {
-                    height: height,
-                    market: result.market,
-                    duration: result.duration,
-                    quotes: [ id ]
-                  }
-                } else {
-                  const quotes = books.quotes
-                  quotes.push(id)
-                  books = {
-                    height: height,
-                    market: result.market,
-                    duration: result.duration,
-                    quotes: quotes
+          for (var j=0; j<res64.events.length; j++) {
+            const event = res64.events[j]
+            if (event.type === "message") {
+              event.attributes.map(async a => {
+                const key = Buffer.from(a.key, 'base64').toString()
+                if (a.value !== undefined) {
+                  var value = Buffer.from(a.value, 'base64').toString()
+                }
+                //console.log("  '" + key + "': " + value)
+                if (key === "mtm.MarketTick") {
+                  await addMarketTick(db, height, time, value, parseFloat(result.consensus.amount))
+                }
+                if (key.startsWith("quote.")) {
+                  //console.log("quote event: " + value)
+                  const id = parseInt(key.slice(6), 10)
+                  if (value === "event.update") {
+                    await addQuoteEvent(db, height, id, {
+                      spot: parseFloat(result.spot.amount),
+                      premium: parseFloat(result.premium.amount),
+                      active: true
+                    })
+                  } else if (value === "event.create") {
+                    const spot = parseFloat(result.spot.amount)
+                    const premium = parseFloat(result.premium.amount)
+                    await addQuoteEvent(db, height, id, {
+                      spot: spot,
+                      premium: premium,
+                      create: true,
+                      market: result.market,
+                      duration: result.duration,
+                      active: true
+                    })
+                    var books = await db.collection('books').find({
+                      market: result.market, 
+                      duration: result.duration 
+                    }).sort({height:-1}).next()
+                    if (books === null) {
+                      books = {
+                        height: height,
+                        market: result.market,
+                        duration: result.duration,
+                        quotes: [ id ]
+                      }
+                    } else {
+                      const quotes = books.quotes
+                      quotes.push(id)
+                      books = {
+                        height: height,
+                        market: result.market,
+                        duration: result.duration,
+                        quotes: quotes
+                      }
+                    }
+                    await db.collection('books').replaceOne({
+                      height: height,
+                      market: result.market,
+                      duration: result.duration
+                    }, books, {
+                      upsert: true
+                    })
+                  } else if (value === "event.cancel" || value === "event.final") {
+                    const quote = await db.collection('quotes').find({id:id,create:true}).next()
+                    await addQuoteEvent(db, height, id, {
+                      destroy: true,
+                      active: false
+                    })
+                    var books = await db.collection('books').find({
+                      market: quote.market, 
+                      duration: quote.duration 
+                    }).sort({height:-1}).next()
+                    books = {
+                      height: height,
+                      market: quote.market,
+                      duration: quote.duration,
+                      quotes: books.quotes.filter(el => {
+                        if (el !== id) return true
+                        return false
+                      })
+                    }
+                    await db.collection('books').replaceOne({
+                      height: height,
+                      market: quote.market,
+                      duration: quote.duration
+                    }, books, {
+                      upsert: true
+                    })
+                  } else if (value === "event.match") {
+                    // do nothing
+                  } else if (value === "event.deposit") {
+                    // do nothing
+                  } else {
+                    console.log("need to handle: " + value)
+                    process.exit()
                   }
                 }
-                await db.collection('books').replaceOne({
-                  height: height,
-                  market: result.market,
-                  duration: result.duration
-                }, books, {
-                  upsert: true
-                })
-              } else if (value === "event.cancel" || value === "event.final") {
-                const quote = await db.collection('quotes').find({id:id,create:true}).next()
-                await addQuoteEvent(db, height, id, {
-                  destroy: true,
-                  active: false
-                })
-                var books = await db.collection('books').find({
-                  market: quote.market, 
-                  duration: quote.duration 
-                }).sort({height:-1}).next()
-                books = {
-                  height: height,
-                  market: quote.market,
-                  duration: quote.duration,
-                  quotes: books.quotes.filter(el => {
-                    if (el !== id) return true
-                    return false
-                  })
+                if (key.startsWith("trade.")) {
+                  const id = parseInt(key.slice(6), 10)
+                  //console.log("trade event: " + value)
+                  if (value === "event.create") {
+                    await addTradeEvent(db, height, id, result)
+                  } else if (value === "event.settle") {
+                    await addTradeEvent(db, height, id, result)
+                  } else {
+                    console.log("need to handle: " + value)
+                    process.exit()
+                  }
                 }
-                await db.collection('books').replaceOne({
-                  height: height,
-                  market: quote.market,
-                  duration: quote.duration
-                }, books, {
-                  upsert: true
-                })
-              } else if (value === "event.match") {
-                // do nothing
-              } else if (value === "event.deposit") {
-                // do nothing
-              } else {
-                console.log("need to handle: " + value)
-                process.exit()
-              }
-            }
-            if (key.startsWith("trade.")) {
-              const id = parseInt(key.slice(6), 10)
-              //console.log("trade event: " + value)
-              if (value === "event.create") {
-                await addTradeEvent(db, height, id, result)
-              } else if (value === "event.settle") {
-                await addTradeEvent(db, height, id, result)
-              } else {
-                console.log("need to handle: " + value)
-                process.exit()
-              }
+              })
             }
           }
         }
