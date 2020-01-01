@@ -47,34 +47,21 @@ class API {
     }, (env, name, payload) => {
       //console.log("Event: " + name)
       //console.log(JSON.stringify(payload, null, 2))
-      const events = {}
-      if (name === "tm.event='NewBlock'") {
-        var data = payload
-      } else {
-        data = JSON.parse(Buffer.from(payload.data.value.TxResult.result.data, 'base64').toString())
-        data.block = payload.data.value.TxResult.height
-        payload.data.value.TxResult.result.events.map(event => {
-          if (event.type === "message") {
-            event.attributes.map(a => {
-              const key = Buffer.from(a.key, 'base64').toString()
-              events[key] = Buffer.from(a.value, 'base64').toString()
-              return null
-            })
-          }
-          return null
-        })
-      }
       if (this.subscriptions[name] !== undefined) {
         this.subscriptions[name] = this.subscriptions[name].reduce((acc, id) => {
           if (this.submap[id] !== undefined) {
-            this.submap[id].cb(data, events) 
+            this.submap[id].cb(payload) 
             acc.push(id)
           }
           return acc
         }, [])
       }
     }, str => {
-      client.send(str)
+      try {
+        client.send(str)
+      } catch (err) {
+        console.log("Send failed: " + err.message)
+      }
     })
     
     this.durationFromSeconds = seconds => {
@@ -128,6 +115,15 @@ class API {
           reject()
           throw new Error("Connect failed")
         }
+        const submap = this.submap
+        this.submap = []
+        this.subscriptions = {}
+        Object.keys(submap).map(async id => {
+          const key = submap[id].key
+          const cb = submap[id].cb
+          console.log("Resubscribing: " + key)
+          await this.subscribe(key, cb)
+        })
         resolve()
       }, async msg => {
         const response = await this.protocol.process(null, msg)

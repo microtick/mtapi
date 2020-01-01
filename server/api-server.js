@@ -5,7 +5,10 @@ const objecthash = require('object-hash')
 const { marshalTx, unmarshalTx } = require('./amino.js')
 const config = require('./config.js')
 
-const USE_MONGO = true
+const USE_DATABASE = false
+if (USE_DATABASE) {
+  var db = require('./database.js')
+}
 
 process.on('unhandledRejection', error => {
   if (error !== undefined) {
@@ -14,6 +17,7 @@ process.on('unhandledRejection', error => {
   } else {
     console.log("promise rejection")
   }
+  process.exit(-1)
 });
 
 // Subscriptions (websocket)
@@ -61,87 +65,68 @@ setInterval(async () => {
   })
 }, 100)
 
-// One tendermint subscription per socket
-const tmsockets = {}
 // Added at subsciption time: mapping event -> []id
 const subscriptions = {}
 // Maintained at connection: id -> client
 const clients = {}
+const ids = {}
+
+const connect = async () => {
+    
+  //console.log("Tendermint connecting")
+  const tmclient = new ws("ws://" + tendermint + "/websocket")
+  
+  tmclient.on('open', () => {
+    console.log("Tendermint connected")
+    
+    const req = {
+      "jsonrpc": "2.0",
+      "method": "subscribe",
+      "id": "0",
+      "params": {
+        "query": NEWBLOCK
+      }
+    }
+    tmclient.send(JSON.stringify(req))
+  })
+
+  tmclient.on('message', msg => {
+    const obj = JSON.parse(msg)
+    if (obj.result === undefined) {
+      console.log("Tendermint message error: " + JSON.stringify(obj, null, 2))
+      tmclient.close()
+      return
+    }
+    if (obj.result.data !== undefined) {
+      handleNewBlock(obj)
+    }
+  })
+
+  tmclient.on('close', () => {
+    console.log("Tendermint disconnected")
+    console.log("Attempting to reconnect")
+    setTimeout(connect, 1000)
+  })
+
+  tmclient.on('error', err => {
+    this.err = err
+    console.log("Tendermint error: " + err.message)
+  })
+}
+
+connect()
 
 const subscribe = (id, event) => {
-  
-  const connect = () => {
-    
-    var tmclient = tmsockets[event]
-    if (tmclient === undefined) {
-      //console.log("Tendermint connecting")
-      tmclient = new ws("ws://" + tendermint + "/websocket")
-      tmsockets[event] = tmclient
-    }
-  
-    tmclient.on('open', () => {
-      //console.log("Tendermint connected")
-      
-      console.log("Tendermint subscribe: " + event)
-      const req = {
-        "jsonrpc": "2.0",
-        "method": "subscribe",
-        "id": "0",
-        "params": {
-          "query": event
-        }
-      }
-      tmclient.send(JSON.stringify(req))
-    })
-
-    tmclient.on('message', msg => {
-      const obj = JSON.parse(msg)
-      if (obj.result === undefined) {
-        console.log("Tendermint message error: " + event + ": " + JSON.stringify(obj, null, 2))
-        tmclient.close()
-        return
-      }
-      //console.log("Tendermint message: " + event)
-      sendEvent(obj.result.query, {
-        data: obj.result.data
-      })
-      if (USE_MONGO && event === NEWBLOCK && obj.result.data !== undefined) {
-        handleNewBlock(obj)
-      } else if (event === NEWBLOCK && obj.result.data !== undefined) {
-        const height = parseInt(obj.result.data.value.block.header.height, 10)
-        //console.log("Block: " + height)
-      }
-    })
-
-    tmclient.on('close', () => {
-      console.log("Tendermint disconnected: " + event)
-      if (subscriptions[event].length > 0) {
-        console.log("Attempting to reconnect")
-        setTimeout(connect, 1000)
-      }
-      delete tmsockets[event]
-    })
-  
-    tmclient.on('error', err => {
-      this.err = err
-      console.log("Tendermint error: " + err.message)
-    })
-  }
-  
-  if (tmsockets[event] === undefined) {
-    connect()
-  }
-  
+  console.log("Subscribe: " + id + ": " + event)
   if (subscriptions[event] === undefined) {
-    subscriptions[event] = [ id ]
+    subscriptions[event] = [id]
   } else {
     subscriptions[event].push(id)
   }
 }
-
-subscribe(0, NEWBLOCK)
-
+  
 const unsubscribe = (id, event) => {
+  console.log("Unsubscribe: " + id + ": " + event)
   if (subscriptions[event] === undefined) return
   subscriptions[event] = subscriptions[event].reduce((acc, thisid) => {
     if (thisid !== id) {
@@ -149,69 +134,223 @@ const unsubscribe = (id, event) => {
     }
     return acc
   }, [])
-  if (subscriptions[event].length === 0 && tmsockets[event] !== undefined) {
-    tmsockets[event].close()
-    delete tmsockets[event]
-  }
 }
 
 const sendEvent = (event, payload) => {
-  if (event === NEWBLOCK) {
-    console.log("Block")
-    
-    // Reset cache
-    const oldcache = cache
-    
-    cache = {
-      accounts: {}
-    }
-    
-    if (oldcache.accounts !== undefined) {
-      const keys = Object.keys(oldcache.accounts)
-      for (var i=0; i<keys.length; i++) {
-        const key = keys[i]
-        if (Object.keys(oldcache.accounts[key].queue).length > 0) {
-          console.log("Copying cache for acct: " + key)
-          cache.accounts[key] = oldcache.accounts[key]
-        }
-      }
-    }
-    
-    // Check pending Tx hashes
-    const hashes = Object.keys(pending)
-    if (hashes.length > 25) {
-      console.log("Warning: " + hashes.length + " pending Txs")
-    }
-    hashes.map(async hash => {
-      const url = "http://" + tendermint + "/tx?hash=0x" + hash
-      const res = await axios.get(url)
-      if (res.data.error !== undefined) {
-        pending[hash].tries++
-        if (pending[hash].tries > 2) {
-          console.log("TX error: " + hash + " " + JSON.stringify(res.data.error))
-          pending[hash].failure(res.data.error)
-        }
-      } else if (res.data.result !== undefined) {
-        console.log("TX success: " + hash)
-        pending[hash].success(res.data.result)
-        pending[hash].timedout = true
-      }
-      if (pending[hash].timedout) {
-        //console.log("Deleting pending TX: " + hash)
-        delete pending[hash]
-      }
-    })
-  }
   if (subscriptions[event] === undefined) return
   const msg = apiProtocolQueue.createEvent(event, payload)
   subscriptions[event].map(id => {
     const client = clients[id]
     if (client !== undefined) {
+      //console.log("Sending event: " + event + " id "+ id)
       client.send(msg)
     //} else if (id !== 0) {
       //unsubscribe(id, event)
     }
   })
+}
+
+const sendAccountEvent = (acct, event, payload) => {
+  if (subscriptions[event] === undefined) return
+  const msg = apiProtocolQueue.createEvent(event, payload)
+  subscriptions[event].map(id => {
+    if (ids[acct] !== undefined) {
+      const client = clients[ids[acct]]
+      if (client !== undefined) {
+        //console.log("Sending event: " + event + " id "+ id)
+        client.send(msg)
+      //} else if (id !== 0) {
+        //unsubscribe(id, event)
+      }
+    }
+  })
+}
+
+var syncing = false
+var chainHeight = 0
+
+const handleNewBlock = async obj => {
+  chainHeight = parseInt(obj.result.data.value.block.header.height, 10)
+  if (USE_DATABASE) {
+    if (syncing) return
+    const chainid = obj.result.data.value.block.header.chain_id
+    await db.init(config.mongo, chainid)
+    const dbHeight = await db.height()
+    if (dbHeight < chainHeight - 1) {
+      console.log("Syncing...")
+      syncing = true
+      for (var i=dbHeight + 1; i < chainHeight; i++) {
+        await processBlock(i)
+      }
+      console.log("Done syncing...")
+      syncing = false
+    }
+  }
+  await processBlock(chainHeight)
+    
+  // Reset cache
+  const oldcache = cache
+    
+  cache = {
+    accounts: {}
+  }
+    
+  if (oldcache.accounts !== undefined) {
+    const keys = Object.keys(oldcache.accounts)
+    for (var i=0; i<keys.length; i++) {
+      const key = keys[i]
+      if (Object.keys(oldcache.accounts[key].queue).length > 0) {
+        console.log("Copying cache for acct: " + key)
+        cache.accounts[key] = oldcache.accounts[key]
+      }
+    }
+  }
+    
+  // Check pending Tx hashes
+  const hashes = Object.keys(pending)
+  if (hashes.length > 25) {
+    console.log("Warning: " + hashes.length + " pending Txs")
+  }
+  hashes.map(async hash => {
+    const url = "http://" + tendermint + "/tx?hash=0x" + hash
+    const res = await axios.get(url)
+    if (res.data.error !== undefined) {
+      pending[hash].tries++
+      if (pending[hash].tries > 2) {
+        console.log("TX error: " + hash + " " + JSON.stringify(res.data.error))
+        pending[hash].failure(res.data.error)
+      }
+    } else if (res.data.result !== undefined) {
+      console.log("TX success: " + hash)
+      pending[hash].success(res.data.result)
+      pending[hash].timedout = true
+    }
+    if (pending[hash].timedout) {
+      //console.log("Deleting pending TX: " + hash)
+      delete pending[hash]
+    }
+  })
+}
+
+const processBlock = async height => {
+  //console.log(JSON.stringify(obj, null, 2))
+  const block = await queryTendermint('/block?height=' + height)
+  const results = await queryTendermint('/block_results?height=' + height)
+  block.height = height // replace string with int 
+  
+  const num_txs = parseInt(block.block.header.num_txs, 10)
+  console.log("Block " + block.height + ": txs=" + num_txs)
+  if (USE_DATABASE) {
+    await db.insertBlock(block.height, block.block.header.time)
+  }
+  sendEvent("blocks", {
+    height: block.height,
+    time: block.block.header.time
+  })
+  if (num_txs > 0) {
+    const txs = block.block.data.txs
+    for (var i=0; i<txs.length; i++) {
+      //console.log("TX #" + i)
+      const txb64 = txs[i]
+      //var bytes = Buffer.from(txb64, 'base64')
+      //var hash = crypto.createHash('sha256').update(bytes).digest('hex')
+      const res64 = results.results.deliver_tx[i]
+      if (res64.code === 0) {
+        // Tx successful
+        if (res64.data !== null) {
+          var result = JSON.parse(Buffer.from(res64.data, 'base64').toString())
+          //console.log(JSON.stringify(result, null, 2))
+        }
+        for (var j=0; j<res64.events.length; j++) {
+          const event = res64.events[j]
+          if (event.type === "message") {
+            event.attributes.map(async a => {
+              const key = Buffer.from(a.key, 'base64').toString()
+              if (a.value !== undefined) {
+                const value = Buffer.from(a.value, 'base64').toString()
+                await processEvent(block, result, key, value)
+              }
+            })
+          }
+        }
+      }
+    }
+  }
+}
+
+const processEvent = async (block, result, key, value) => {
+  //console.log("key=" + key + " value=" + value)
+  if (key === "mtm.MarketTick") {
+    const consensus = parseFloat(result.consensus.amount)
+    if (USE_DATABASE) {
+      await db.insertMarketTick(block.height, block.block.header.time, value, consensus)
+    }
+    sendEvent("market." + value, {
+      height: block.height,
+      time: block.block.header.time,
+      consensus: consensus
+    })
+  }
+  if (key.startsWith("quote.")) {
+    //console.log("quote event: " + value)
+    const id = parseInt(key.slice(6), 10)
+    if (value === "event.update") {
+      if (USE_DATABASE) {
+        await db.insertQuoteEvent(block.height, id, {
+          spot: parseFloat(result.spot.amount),
+          premium: parseFloat(result.premium.amount),
+          active: true
+        })
+      }
+    } else if (value === "event.create") {
+      const spot = parseFloat(result.spot.amount)
+      const premium = parseFloat(result.premium.amount)
+      if (USE_DATABASE) {
+        await db.newQuote(block.height, result.market, result.duration, id)
+        await db.insertQuoteEvent(db, block.height, id, {
+          spot: spot,
+          premium: premium,
+          create: true,
+          market: result.market,
+          duration: result.duration,
+          active: true
+        })
+      }
+    } else if (value === "event.cancel" || value === "event.final") {
+      if (USE_DATABASE) {
+        await db.removeQuote(block.height, result.market, result.duration, id)
+        await db.insertQuoteEvent(db, block.height, id, {
+          destroy: true,
+          active: false
+        })
+      }
+    } else if (value === "event.match") {
+      // do nothing
+    } else if (value === "event.deposit") {
+      // do nothing
+    } else {
+      throw new Error("Unknown event: " + value)
+    }
+  }
+  if (key.startsWith("trade.")) {
+    const id = parseInt(key.slice(6), 10)
+    //console.log("trade event: " + value)
+    if (value === "event.create") {
+      if (USE_DATABASE) {
+        await db.insertTradeEvent(block.height, id, result)
+      }
+    } else if (value === "event.settle") {
+      if (USE_DATABASE) {
+        await db.insertTradeEvent(block.height, id, result)
+      }
+    } else {
+      throw new Error("Unknown event: " + value)
+    }
+  }
+  if (key.startsWith("acct.")) {
+    const acct = key.slice(5)
+    sendAccountEvent(acct, value, result)
+  }
 }
 
 // Client (REST calls to Tendermint and Cosmos through ABCI)
@@ -268,6 +407,7 @@ server.on('connection', async client => {
     console.log("  Disconnect " + env.id)
     const id = env.id
     delete clients[id]
+    delete ids[env.acct]
     //const acct = env.acct
   })
   
@@ -296,6 +436,7 @@ const handleMessage = async (env, name, payload) => {
     switch (name) {
       case 'connect':
         env.acct = payload.acct
+        ids[env.acct] = env.id
         return {
           status: true
         }
@@ -390,8 +531,8 @@ const handleMessage = async (env, name, payload) => {
         }
         break
       case 'markethistory':
-        if (!USE_MONGO) throw new Error('No market tick DB')
-        res = await queryMarketHistory(payload.market, payload.startblock,
+        if (!USE_DATABASE) throw new Error('No market tick DB')
+        res = await db.queryMarketHistory(payload.market, payload.startblock,
           payload.endblock, payload.target)
         return {
           status: true,
@@ -508,7 +649,6 @@ const handleMessage = async (env, name, payload) => {
                   tries: 0
                 }
                 setTimeout(() => {obj.timedout = true}, TXTIMEOUT)
-                console.log("  hash=" + res.hash)
                 pending[res.hash] = obj
               })
               if (txres.tx_result.data !== null) {
@@ -668,446 +808,4 @@ const pageHistory = async (acct, page, inc) => {
     return null
 }
   
-// MongoDB - slurp up market ticks into database
-
-var handleNewBlock
-var queryMarketHistory
-
-if (USE_MONGO) {
   
-  const mongodb = require('mongodb').MongoClient
-  const crypto = require('crypto')
-
-  var mongo = null
-  var syncing = false
-  var chainid
-  
-  var do_reconnect = false
-  
-  const reconnect = async () => {
-    if (mongo !== null) {
-      await mongo.close()
-    }
-    mongodb.connect(config.mongo, { 
-      useNewUrlParser: true,
-      useUnifiedTopology: true
-    }, (err, client) => {
-      if (err === null) {
-        console.log("Connected to MongoDB")
-        mongo = client
-      }
-    })
-  }
-  
-  reconnect()
-  
-  setInterval(() => {
-    do_reconnect = true
-  }, 300000) // close and flag reconnect every 5 minutes
-  
-  handleNewBlock = async obj => {
-    chainid = obj.result.data.value.block.header.chain_id
-    const height = parseInt(obj.result.data.value.block.header.height, 10)
-    //console.log(JSON.stringify(obj, null, 2))
-    
-    // Handle reconnect inline to prevent stepping on DB operations
-    if (do_reconnect) {
-      do_reconnect = false
-      await reconnect()
-    }
-    
-    if (mongo !== null && mongo.isConnected()) {
-      const db = mongo.db(chainid)
-      
-      await db.createCollection('meta', { capped: true, max: 1, size: 4096 })
-      await db.createCollection('counters', { capped: true, max: 1, size: 4096 })
-      await db.createCollection('blocks')
-      await db.createCollection('ticks')
-      await db.createCollection('quotes')
-      await db.createCollection('trades')
-      await db.createCollection('books')
-      
-      const counters = await db.collection('counters')
-      if (await counters.find().count() === 0) {
-        await counters.insertOne({ 
-          ticks: 1,
-          quotes: 1,
-          trades: 1
-        })
-      }
-      
-      const hasBlockIndex = await db.collection('blocks').indexExists('history')
-      if (!hasBlockIndex) {
-        console.log("Creating block index")
-        await db.collection('blocks').createIndex({
-          height: 1
-        }, {
-          name: 'history'
-        })
-        await db.collection('blocks').createIndex({
-          time: 1
-        }, {
-          name: 'time'
-        })
-      }
-      
-      const hasTickIndex = await db.collection('ticks').indexExists('history')
-      if (!hasTickIndex) {
-        console.log("Creating tick index")
-        await db.collection('ticks').createIndex({
-          index: 1,
-          height: 1,
-          market: 1
-        }, {
-          name: 'history'
-        })
-      }
-      
-      const hasQuoteIndex = await db.collection('quotes').indexExists('history')
-      if (!hasQuoteIndex) {
-        console.log("Creating quote index")
-        await db.collection('quotes').createIndex({
-          index: 1,
-          height: 1,
-          id: 1
-        }, {
-          name: 'history'
-        })
-      }
-      
-      const hasTradeIndex = await db.collection('trades').indexExists('history')
-      if (!hasTradeIndex) {
-        console.log("Creating trade index")
-        await db.collection('trades').createIndex({
-          index: 1,
-          height: 1,
-          id: 1
-        }, {
-          name: 'history'
-        })
-      }
-      
-      const hasBookIndex = await db.collection('books').indexExists('history')
-      if (!hasBookIndex) {
-        console.log("Creating book index")
-        await db.collection('books').createIndex({
-          height: 1
-        }, {
-          name: 'history'
-        })
-      }
-      
-      const synced = await isSynced(db, height)
-      if (synced) {
-        const block = await queryTendermint('/block?height=' + height)
-        insertBlock(db, block.block)
-      } else if (!syncing) {
-        sync(db)
-      }
-    }
-  }
-  
-  const isSynced = async (db, height) => {
-    const curs = await db.collection('meta').find()
-    if (await curs.hasNext()) {
-      const doc = await curs.next()
-      if (height === doc.syncHeight + 1) {
-        return true
-      }
-    } 
-    return false
-  }
-  
-  const sync = async db => {
-    syncing = true
-    console.log("syncing...")
-    
-    var block
-    do {
-      try {
-        const doc = await db.collection('meta').find().next()
-      
-        if (doc !== null) {
-          var curBlock = doc.syncHeight + 1
-        } else {
-          curBlock = 1
-        }
-        block = await queryTendermint('/block?height=' + curBlock)
-        if (block !== undefined) {
-          await insertBlock(db, block.block)
-        }
-      } catch (err) {
-        // try again... (could have reset the db connection while syncing)
-        console.log("error: " + err)
-        syncing = false
-        return
-      }
-    } while (block !== undefined)
-    
-    console.log("done syncing...")
-    syncing = false
-  }
-  
-  const insertBlock = async (db, block) => {
-    const height = parseInt(block.header.height, 10)
-    const time = Date.parse(block.header.time)
-    
-    db.collection('blocks').replaceOne({
-      height: height
-    }, {
-      height: height,
-      time: time
-    }, {
-      upsert: true
-    })
-    
-    const num_txs = parseInt(block.header.num_txs, 10)
-    //console.log("Block " + height + ": txs=" + num_txs)
-    if (num_txs > 0) {
-      const results = await queryTendermint('/block_results?height=' + height)
-      const txs = block.data.txs
-      for (var i=0; i<txs.length; i++) {
-        const txb64 = txs[i]
-        var bytes = Buffer.from(txb64, 'base64')
-        var hash = crypto.createHash('sha256').update(bytes).digest('hex')
-        //const stdtx = unmarshalTx(bytes)
-        //console.log(JSON.stringify(stdtx, null, 2))
-        const res64 = results.results.deliver_tx[i]
-        if (res64.code === 0) {
-          if (res64.data !== null) {
-            var result = JSON.parse(Buffer.from(res64.data, 'base64').toString())
-            //console.log(JSON.stringify(result, null, 2))
-          }
-          //console.log("Tx: " + stdtx.value.msg[0].type + " " + hash)
-          for (var j=0; j<res64.events.length; j++) {
-            const event = res64.events[j]
-            if (event.type === "message") {
-              event.attributes.map(async a => {
-                const key = Buffer.from(a.key, 'base64').toString()
-                if (a.value !== undefined) {
-                  var value = Buffer.from(a.value, 'base64').toString()
-                }
-                //console.log("  '" + key + "': " + value)
-                if (key === "mtm.MarketTick") {
-                  await addMarketTick(db, height, time, value, parseFloat(result.consensus.amount))
-                }
-                if (key.startsWith("quote.")) {
-                  //console.log("quote event: " + value)
-                  const id = parseInt(key.slice(6), 10)
-                  if (value === "event.update") {
-                    await addQuoteEvent(db, height, id, {
-                      spot: parseFloat(result.spot.amount),
-                      premium: parseFloat(result.premium.amount),
-                      active: true
-                    })
-                  } else if (value === "event.create") {
-                    const spot = parseFloat(result.spot.amount)
-                    const premium = parseFloat(result.premium.amount)
-                    await addQuoteEvent(db, height, id, {
-                      spot: spot,
-                      premium: premium,
-                      create: true,
-                      market: result.market,
-                      duration: result.duration,
-                      active: true
-                    })
-                    var books = await db.collection('books').find({
-                      market: result.market, 
-                      duration: result.duration 
-                    }).sort({height:-1}).next()
-                    if (books === null) {
-                      books = {
-                        height: height,
-                        market: result.market,
-                        duration: result.duration,
-                        quotes: [ id ]
-                      }
-                    } else {
-                      const quotes = books.quotes
-                      quotes.push(id)
-                      books = {
-                        height: height,
-                        market: result.market,
-                        duration: result.duration,
-                        quotes: quotes
-                      }
-                    }
-                    await db.collection('books').replaceOne({
-                      height: height,
-                      market: result.market,
-                      duration: result.duration
-                    }, books, {
-                      upsert: true
-                    })
-                  } else if (value === "event.cancel" || value === "event.final") {
-                    const quote = await db.collection('quotes').find({id:id,create:true}).next()
-                    await addQuoteEvent(db, height, id, {
-                      destroy: true,
-                      active: false
-                    })
-                    var books = await db.collection('books').find({
-                      market: quote.market, 
-                      duration: quote.duration 
-                    }).sort({height:-1}).next()
-                    books = {
-                      height: height,
-                      market: quote.market,
-                      duration: quote.duration,
-                      quotes: books.quotes.filter(el => {
-                        if (el !== id) return true
-                        return false
-                      })
-                    }
-                    await db.collection('books').replaceOne({
-                      height: height,
-                      market: quote.market,
-                      duration: quote.duration
-                    }, books, {
-                      upsert: true
-                    })
-                  } else if (value === "event.match") {
-                    // do nothing
-                  } else if (value === "event.deposit") {
-                    // do nothing
-                  } else {
-                    console.log("need to handle: " + value)
-                    process.exit()
-                  }
-                }
-                if (key.startsWith("trade.")) {
-                  const id = parseInt(key.slice(6), 10)
-                  //console.log("trade event: " + value)
-                  if (value === "event.create") {
-                    await addTradeEvent(db, height, id, result)
-                  } else if (value === "event.settle") {
-                    await addTradeEvent(db, height, id, result)
-                  } else {
-                    console.log("need to handle: " + value)
-                    process.exit()
-                  }
-                }
-              })
-            }
-          }
-        }
-      }
-    }
-    
-    const meta = await db.collection('meta').insertOne({ 
-      syncHeight: height,
-      syncTime: block.header.time
-    })
-  }
-  
-  const addMarketTick = async (db, height, time, market, consensus) => {
-    //console.log("SLURP MarketTick: " + market + " " + consensus)
-    const counters = await db.collection('counters').find().next()
-    
-    const index = counters.ticks++
-    await db.collection('ticks').replaceOne({
-      index: index
-    }, {
-      index: index,
-      height: height,
-      market: market,
-      consensus: consensus
-    }, {
-      upsert: true
-    })
-    
-    await db.collection('counters').insertOne({
-      ticks: counters.ticks,
-      quotes: counters.quotes,
-      trades: counters.trades
-    })
-  }
-  
-  const addQuoteEvent = async (db, height, id, data) => {
-    //console.log("SLURP quote event: " + id)
-    const counters = await db.collection('counters').find().next()
-    
-    const insertData = Object.assign({
-      index: counters.quotes++,
-      height: height,
-      id: id
-    }, data)
-    await db.collection('quotes').replaceOne({
-      index: insertData.index
-    }, insertData, {
-      upsert: true
-    })
-    
-    await db.collection('counters').insertOne({
-      ticks: counters.ticks,
-      quotes: counters.quotes,
-      trades: counters.trades
-    })
-  }
-  
-  const addTradeEvent = async (db, height, id, data) => {
-    const counters = await db.collection('counters').find().next()
-    
-    const insertData = Object.assign({
-      index: counters.trades++,
-      height: height,
-      id: id
-    }, data)
-    await db.collection('trades').replaceOne({
-      index: insertData.index
-    }, insertData, {
-      upsert: true
-    })
-    
-    await db.collection('counters').insertOne({
-      ticks: counters.ticks,
-      quotes: counters.quotes,
-      trades: counters.trades
-    })
-  }
-  
-  queryMarketHistory = async (market, startblock, endblock, target) => {
-    const db = mongo.db(chainid)
-    //console.log("startblock=" + startblock)
-    //console.log("endblock=" + endblock)
-    //console.log("target=" + target)
-    const curs = await db.collection('ticks').aggregate([
-      {
-        $match: {
-          $and: [
-            { market: market },
-            { height: { $gte: startblock }},
-            { height: { $lte: endblock }}
-          ]
-        }
-      },
-      {
-        $lookup: {
-          from: 'blocks',
-          localField: 'height',
-          foreignField: 'height',
-          as: 'time'
-        }
-      }
-    ])
-    const hist = await curs.toArray()
-    const total = hist.length
-    //console.log("total=" + total)
-    //console.log("target=" + target)
-    const skip = Math.floor(total / target) 
-    const res = hist.reduce((acc, el, index) => {
-      if (skip === 0 || (index % skip) === 0) {
-        if (el.time[0] !== undefined) {
-          acc.push({
-            height: el.height,
-            time: el.time[0].time,
-            consensus: el.consensus
-          })
-        }
-      }
-      return acc
-    }, [])
-    //console.log("reduced=" + res.length)
-    return res
-  }
-  
-}

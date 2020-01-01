@@ -3913,7 +3913,7 @@ $packages["github.com/cosmos/amino-js/go/lib/cosmos/cosmos-sdk/types"] = (functi
 	return $pkg;
 })();
 $packages["github.com/cosmos/amino-js/go/extensions"] = (function() {
-	var $pkg = {}, $init, types, amino, TxCreateMarket, TxCreateQuote, TxCancelQuote, TxUpdateQuote, TxDepositQuote, TxMarketTrade, TxLimitTrade, TxSettleTrade, ptrType$8, ptrType$9, RegisterCodec;
+	var $pkg = {}, $init, types, amino, TxCreateMarket, TxCreateQuote, TxCancelQuote, TxUpdateQuote, TxDepositQuote, TxWithdrawQuote, TxMarketTrade, TxLimitTrade, TxSettleTrade, ptrType$8, ptrType$9, RegisterCodec;
 	types = $packages["github.com/cosmos/amino-js/go/lib/cosmos/cosmos-sdk/types"];
 	amino = $packages["github.com/tendermint/go-amino"];
 	TxCreateMarket = $pkg.TxCreateMarket = $newType(0, $kindStruct, "extensions.TxCreateMarket", true, "github.com/cosmos/amino-js/go/extensions", true, function(Account_, Market_) {
@@ -3980,6 +3980,18 @@ $packages["github.com/cosmos/amino-js/go/extensions"] = (function() {
 		this.Requester = Requester_;
 		this.Deposit = Deposit_;
 	});
+	TxWithdrawQuote = $pkg.TxWithdrawQuote = $newType(0, $kindStruct, "extensions.TxWithdrawQuote", true, "github.com/cosmos/amino-js/go/extensions", true, function(Id_, Requester_, Withdraw_) {
+		this.$val = this;
+		if (arguments.length === 0) {
+			this.Id = 0;
+			this.Requester = types.AccAddress.nil;
+			this.Withdraw = new types.DecCoin.ptr("", new types.Dec.ptr(ptrType$9.nil));
+			return;
+		}
+		this.Id = Id_;
+		this.Requester = Requester_;
+		this.Withdraw = Withdraw_;
+	});
 	TxMarketTrade = $pkg.TxMarketTrade = $newType(0, $kindStruct, "extensions.TxMarketTrade", true, "github.com/cosmos/amino-js/go/extensions", true, function(Market_, Duration_, Buyer_, TradeType_, Quantity_) {
 		this.$val = this;
 		if (arguments.length === 0) {
@@ -4027,18 +4039,19 @@ $packages["github.com/cosmos/amino-js/go/extensions"] = (function() {
 	ptrType$8 = $ptrType(amino.ConcreteOptions);
 	ptrType$9 = $ptrType($packages["math/big"].Int);
 	RegisterCodec = function(codec) {
-		var codec, x, x$1, x$2, x$3, x$4, x$5, x$6, x$7, $s, $r;
-		/* */ $s = 0; var $f, $c = false; if (this !== undefined && this.$blk !== undefined) { $f = this; $c = true; codec = $f.codec; x = $f.x; x$1 = $f.x$1; x$2 = $f.x$2; x$3 = $f.x$3; x$4 = $f.x$4; x$5 = $f.x$5; x$6 = $f.x$6; x$7 = $f.x$7; $s = $f.$s; $r = $f.$r; } s: while (true) { switch ($s) { case 0:
+		var codec, x, x$1, x$2, x$3, x$4, x$5, x$6, x$7, x$8, $s, $r;
+		/* */ $s = 0; var $f, $c = false; if (this !== undefined && this.$blk !== undefined) { $f = this; $c = true; codec = $f.codec; x = $f.x; x$1 = $f.x$1; x$2 = $f.x$2; x$3 = $f.x$3; x$4 = $f.x$4; x$5 = $f.x$5; x$6 = $f.x$6; x$7 = $f.x$7; x$8 = $f.x$8; $s = $f.$s; $r = $f.$r; } s: while (true) { switch ($s) { case 0:
 		$r = codec.RegisterConcrete((x = new TxCreateMarket.ptr(types.AccAddress.nil, ""), new x.constructor.elem(x)), "microtick/CreateMarket", ptrType$8.nil); /* */ $s = 1; case 1: if($c) { $c = false; $r = $r.$blk(); } if ($r && $r.$blk !== undefined) { break s; }
 		$r = codec.RegisterConcrete((x$1 = new TxCreateQuote.ptr("", 0, types.AccAddress.nil, new types.DecCoin.ptr("", new types.Dec.ptr(ptrType$9.nil)), new types.DecCoin.ptr("", new types.Dec.ptr(ptrType$9.nil)), new types.DecCoin.ptr("", new types.Dec.ptr(ptrType$9.nil))), new x$1.constructor.elem(x$1)), "microtick/CreateQuote", ptrType$8.nil); /* */ $s = 2; case 2: if($c) { $c = false; $r = $r.$blk(); } if ($r && $r.$blk !== undefined) { break s; }
 		$r = codec.RegisterConcrete((x$2 = new TxCancelQuote.ptr(0, types.AccAddress.nil), new x$2.constructor.elem(x$2)), "microtick/CancelQuote", ptrType$8.nil); /* */ $s = 3; case 3: if($c) { $c = false; $r = $r.$blk(); } if ($r && $r.$blk !== undefined) { break s; }
 		$r = codec.RegisterConcrete((x$3 = new TxUpdateQuote.ptr(0, types.AccAddress.nil, new types.DecCoin.ptr("", new types.Dec.ptr(ptrType$9.nil)), new types.DecCoin.ptr("", new types.Dec.ptr(ptrType$9.nil))), new x$3.constructor.elem(x$3)), "microtick/UpdateQuote", ptrType$8.nil); /* */ $s = 4; case 4: if($c) { $c = false; $r = $r.$blk(); } if ($r && $r.$blk !== undefined) { break s; }
 		$r = codec.RegisterConcrete((x$4 = new TxDepositQuote.ptr(0, types.AccAddress.nil, new types.DecCoin.ptr("", new types.Dec.ptr(ptrType$9.nil))), new x$4.constructor.elem(x$4)), "microtick/DepositQuote", ptrType$8.nil); /* */ $s = 5; case 5: if($c) { $c = false; $r = $r.$blk(); } if ($r && $r.$blk !== undefined) { break s; }
-		$r = codec.RegisterConcrete((x$5 = new TxMarketTrade.ptr("", 0, types.AccAddress.nil, false, new types.DecCoin.ptr("", new types.Dec.ptr(ptrType$9.nil))), new x$5.constructor.elem(x$5)), "microtick/MarketTrade", ptrType$8.nil); /* */ $s = 6; case 6: if($c) { $c = false; $r = $r.$blk(); } if ($r && $r.$blk !== undefined) { break s; }
-		$r = codec.RegisterConcrete((x$6 = new TxLimitTrade.ptr("", 0, types.AccAddress.nil, false, new types.DecCoin.ptr("", new types.Dec.ptr(ptrType$9.nil)), new types.DecCoin.ptr("", new types.Dec.ptr(ptrType$9.nil))), new x$6.constructor.elem(x$6)), "microtick/LimitTrade", ptrType$8.nil); /* */ $s = 7; case 7: if($c) { $c = false; $r = $r.$blk(); } if ($r && $r.$blk !== undefined) { break s; }
-		$r = codec.RegisterConcrete((x$7 = new TxSettleTrade.ptr(0, types.AccAddress.nil), new x$7.constructor.elem(x$7)), "microtick/SettleTrade", ptrType$8.nil); /* */ $s = 8; case 8: if($c) { $c = false; $r = $r.$blk(); } if ($r && $r.$blk !== undefined) { break s; }
+		$r = codec.RegisterConcrete((x$5 = new TxWithdrawQuote.ptr(0, types.AccAddress.nil, new types.DecCoin.ptr("", new types.Dec.ptr(ptrType$9.nil))), new x$5.constructor.elem(x$5)), "microtick/WithdrawQuote", ptrType$8.nil); /* */ $s = 6; case 6: if($c) { $c = false; $r = $r.$blk(); } if ($r && $r.$blk !== undefined) { break s; }
+		$r = codec.RegisterConcrete((x$6 = new TxMarketTrade.ptr("", 0, types.AccAddress.nil, false, new types.DecCoin.ptr("", new types.Dec.ptr(ptrType$9.nil))), new x$6.constructor.elem(x$6)), "microtick/MarketTrade", ptrType$8.nil); /* */ $s = 7; case 7: if($c) { $c = false; $r = $r.$blk(); } if ($r && $r.$blk !== undefined) { break s; }
+		$r = codec.RegisterConcrete((x$7 = new TxLimitTrade.ptr("", 0, types.AccAddress.nil, false, new types.DecCoin.ptr("", new types.Dec.ptr(ptrType$9.nil)), new types.DecCoin.ptr("", new types.Dec.ptr(ptrType$9.nil))), new x$7.constructor.elem(x$7)), "microtick/LimitTrade", ptrType$8.nil); /* */ $s = 8; case 8: if($c) { $c = false; $r = $r.$blk(); } if ($r && $r.$blk !== undefined) { break s; }
+		$r = codec.RegisterConcrete((x$8 = new TxSettleTrade.ptr(0, types.AccAddress.nil), new x$8.constructor.elem(x$8)), "microtick/SettleTrade", ptrType$8.nil); /* */ $s = 9; case 9: if($c) { $c = false; $r = $r.$blk(); } if ($r && $r.$blk !== undefined) { break s; }
 		$s = -1; return;
-		/* */ } return; } if ($f === undefined) { $f = { $blk: RegisterCodec }; } $f.codec = codec; $f.x = x; $f.x$1 = x$1; $f.x$2 = x$2; $f.x$3 = x$3; $f.x$4 = x$4; $f.x$5 = x$5; $f.x$6 = x$6; $f.x$7 = x$7; $f.$s = $s; $f.$r = $r; return $f;
+		/* */ } return; } if ($f === undefined) { $f = { $blk: RegisterCodec }; } $f.codec = codec; $f.x = x; $f.x$1 = x$1; $f.x$2 = x$2; $f.x$3 = x$3; $f.x$4 = x$4; $f.x$5 = x$5; $f.x$6 = x$6; $f.x$7 = x$7; $f.x$8 = x$8; $f.$s = $s; $f.$r = $r; return $f;
 	};
 	$pkg.RegisterCodec = RegisterCodec;
 	TxCreateMarket.init("", [{prop: "Account", name: "Account", embedded: false, exported: true, typ: types.AccAddress, tag: ""}, {prop: "Market", name: "Market", embedded: false, exported: true, typ: $String, tag: ""}]);
@@ -4046,6 +4059,7 @@ $packages["github.com/cosmos/amino-js/go/extensions"] = (function() {
 	TxCancelQuote.init("", [{prop: "Id", name: "Id", embedded: false, exported: true, typ: $Uint32, tag: ""}, {prop: "Requester", name: "Requester", embedded: false, exported: true, typ: types.AccAddress, tag: ""}]);
 	TxUpdateQuote.init("", [{prop: "Id", name: "Id", embedded: false, exported: true, typ: $Uint32, tag: ""}, {prop: "Requester", name: "Requester", embedded: false, exported: true, typ: types.AccAddress, tag: ""}, {prop: "NewSpot", name: "NewSpot", embedded: false, exported: true, typ: types.DecCoin, tag: ""}, {prop: "NewPremium", name: "NewPremium", embedded: false, exported: true, typ: types.DecCoin, tag: ""}]);
 	TxDepositQuote.init("", [{prop: "Id", name: "Id", embedded: false, exported: true, typ: $Uint32, tag: ""}, {prop: "Requester", name: "Requester", embedded: false, exported: true, typ: types.AccAddress, tag: ""}, {prop: "Deposit", name: "Deposit", embedded: false, exported: true, typ: types.DecCoin, tag: ""}]);
+	TxWithdrawQuote.init("", [{prop: "Id", name: "Id", embedded: false, exported: true, typ: $Uint32, tag: ""}, {prop: "Requester", name: "Requester", embedded: false, exported: true, typ: types.AccAddress, tag: ""}, {prop: "Withdraw", name: "Withdraw", embedded: false, exported: true, typ: types.DecCoin, tag: ""}]);
 	TxMarketTrade.init("", [{prop: "Market", name: "Market", embedded: false, exported: true, typ: $String, tag: ""}, {prop: "Duration", name: "Duration", embedded: false, exported: true, typ: $Uint16, tag: ""}, {prop: "Buyer", name: "Buyer", embedded: false, exported: true, typ: types.AccAddress, tag: ""}, {prop: "TradeType", name: "TradeType", embedded: false, exported: true, typ: $Bool, tag: ""}, {prop: "Quantity", name: "Quantity", embedded: false, exported: true, typ: types.DecCoin, tag: ""}]);
 	TxLimitTrade.init("", [{prop: "Market", name: "Market", embedded: false, exported: true, typ: $String, tag: ""}, {prop: "Duration", name: "Duration", embedded: false, exported: true, typ: $Uint16, tag: ""}, {prop: "Buyer", name: "Buyer", embedded: false, exported: true, typ: types.AccAddress, tag: ""}, {prop: "TradeType", name: "TradeType", embedded: false, exported: true, typ: $Bool, tag: ""}, {prop: "Limit", name: "Limit", embedded: false, exported: true, typ: types.DecCoin, tag: ""}, {prop: "MaxCost", name: "MaxCost", embedded: false, exported: true, typ: types.DecCoin, tag: ""}]);
 	TxSettleTrade.init("", [{prop: "Id", name: "Id", embedded: false, exported: true, typ: $Uint32, tag: ""}, {prop: "Requester", name: "Requester", embedded: false, exported: true, typ: types.AccAddress, tag: ""}]);
