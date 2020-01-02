@@ -50,7 +50,7 @@ class API {
       if (this.subscriptions[name] !== undefined) {
         this.subscriptions[name] = this.subscriptions[name].reduce((acc, id) => {
           if (this.submap[id] !== undefined) {
-            this.submap[id].cb(payload) 
+            this.submap[id].cb(name, payload) 
             acc.push(id)
           }
           return acc
@@ -166,11 +166,15 @@ class API {
     if (this.subscriptions[key] === undefined) {
       this.subscriptions[key] = []
     }
-    this.subscriptions[key].push(id)
+    if (!this.subscriptions[key].includes(id)) {
+      this.subscriptions[key].push(id)
+    }
+    console.log("API subscribe: " + key + ": id=" + id)
     return id
   }
   
   async unsubscribe(id) {
+    console.log("API unsubscribe: " + id)
     if (this.submap[id] === undefined) return
     const key = this.submap[id].key
     delete this.submap[id]

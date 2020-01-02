@@ -1,6 +1,7 @@
 const mongodb = require('mongodb').MongoClient
 
 var mongo = null
+var db = null
 var do_mongo_reconnect = false
 
 // HACK: mongo driver appears to have a memory leak
@@ -44,7 +45,7 @@ const DB = {
     this.inited = true
     
     await mongo_reconnect(this.url)
-    const db = mongo.db(this.chainid)
+    db = mongo.db(this.chainid)
     
     await db.createCollection('meta', { capped: true, max: 1, size: 4096 })
     await db.createCollection('counters', { capped: true, max: 1, size: 4096 })
@@ -126,7 +127,6 @@ const DB = {
   },
   
   height: async () => {
-    const db = mongo.db(this.chainid)
     const curs = await db.collection('meta').find()
     if (await curs.hasNext()) {
       const doc = await curs.next()
@@ -140,10 +140,10 @@ const DB = {
     if (do_mongo_reconnect) {
       do_mongo_reconnect = false
       await mongo_reconnect(this.url)
+      db = mongo.db(this.chainid)
     }
     // HACK
     
-    const db = mongo.db(this.chainid)
     await db.collection('blocks').replaceOne({
       height: height
     }, {
@@ -160,8 +160,8 @@ const DB = {
   },
   
   insertMarketTick: async (height, time, market, consensus) => {
-    const db = mongo.db(this.chainid)
-    const counters = await db.collection('counters').find().next()
+    var counters = await db.collection('counters').find()
+    counters = await counters.next()
     
     const index = counters.ticks++
     await db.collection('ticks').replaceOne({
@@ -183,8 +183,8 @@ const DB = {
   },
   
   insertQuoteEvent: async (height, id, attrs) => {
-    const db = mongo.db(this.chainid)
-    const counters = await db.collection('counters').find().next()
+    var counters = await db.collection('counters').find()
+    counters = await counters.next()
     
     const insertData = Object.assign({
       index: counters.quotes++,
@@ -205,7 +205,6 @@ const DB = {
   },
   
   newQuote: async (height, market, dur, id) => {
-    const db = mongo.db(this.chainid)
     var books = await db.collection('books').find({
       market: market, 
       duration: dur 
@@ -237,7 +236,6 @@ const DB = {
   },
   
   removeQuote: async (height, market, dur, id) => {
-    const db = mongo.db(this.chainid)
     var books = await db.collection('books').find({
       market: market, 
       duration: dur 
@@ -261,8 +259,8 @@ const DB = {
   },
   
   insertTradeEvent: async (height, id, data) => {
-    const db = mongo.db(this.chainid)
-    const counters = await db.collection('counters').find().next()
+    var counters = await db.collection('counters').find()
+    counters = await counters.next()
     
     const insertData = Object.assign({
       index: counters.trades++,
@@ -283,7 +281,6 @@ const DB = {
   },
   
   queryMarketHistory: async (market, startblock, endblock, target) => {
-    const db = mongo.db(this.chainid)
     //console.log("startblock=" + startblock)
     //console.log("endblock=" + endblock)
     //console.log("target=" + target)

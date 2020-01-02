@@ -5,7 +5,7 @@ const objecthash = require('object-hash')
 const { marshalTx, unmarshalTx } = require('./amino.js')
 const config = require('./config.js')
 
-const USE_DATABASE = false
+const USE_DATABASE = true
 if (USE_DATABASE) {
   var db = require('./database.js')
 }
@@ -73,7 +73,6 @@ const ids = {}
 
 const connect = async () => {
     
-  //console.log("Tendermint connecting")
   const tmclient = new ws("ws://" + tendermint + "/websocket")
   
   tmclient.on('open', () => {
@@ -116,11 +115,18 @@ const connect = async () => {
 
 connect()
 
+const dump_subscriptions = () => {
+  console.log("Subscription Summary")
+  Object.keys(subscriptions).map(key => {
+    console.log("  " + key + ": " + JSON.stringify(subscriptions[key]))
+  })
+}
+
 const subscribe = (id, event) => {
   console.log("Subscribe: " + id + ": " + event)
   if (subscriptions[event] === undefined) {
     subscriptions[event] = [id]
-  } else {
+  } else if (!subscriptions[event].includes(id)) {
     subscriptions[event].push(id)
   }
 }
@@ -136,38 +142,37 @@ const unsubscribe = (id, event) => {
   }, [])
 }
 
+var syncing = false
+var chainHeight = 0
+
 const sendEvent = (event, payload) => {
+  if (syncing) return
   if (subscriptions[event] === undefined) return
   const msg = apiProtocolQueue.createEvent(event, payload)
+  //console.log("Subscriptions:[" + event + "] " + subscriptions[event])
   subscriptions[event].map(id => {
     const client = clients[id]
     if (client !== undefined) {
-      //console.log("Sending event: " + event + " id "+ id)
+      console.log("Sending event: " + event + " => id "+ id)
       client.send(msg)
-    //} else if (id !== 0) {
-      //unsubscribe(id, event)
+      return id
     }
   })
 }
 
 const sendAccountEvent = (acct, event, payload) => {
+  if (syncing) return
   if (subscriptions[event] === undefined) return
   const msg = apiProtocolQueue.createEvent(event, payload)
-  subscriptions[event].map(id => {
-    if (ids[acct] !== undefined) {
-      const client = clients[ids[acct]]
-      if (client !== undefined) {
-        //console.log("Sending event: " + event + " id "+ id)
-        client.send(msg)
-      //} else if (id !== 0) {
-        //unsubscribe(id, event)
-      }
+  //console.log("Subscriptions:[" + event + "] " + subscriptions[event])
+  if (ids[acct] !== undefined) {
+    const client = clients[ids[acct]]
+    if (client !== undefined) {
+      console.log("Sending event: " + event + " => acct "+ acct)
+      client.send(msg)
     }
-  })
+  }
 }
-
-var syncing = false
-var chainHeight = 0
 
 const handleNewBlock = async obj => {
   chainHeight = parseInt(obj.result.data.value.block.header.height, 10)
@@ -186,6 +191,7 @@ const handleNewBlock = async obj => {
       syncing = false
     }
   }
+  dump_subscriptions()
   await processBlock(chainHeight)
     
   // Reset cache
@@ -237,15 +243,17 @@ const processBlock = async height => {
   const block = await queryTendermint('/block?height=' + height)
   const results = await queryTendermint('/block_results?height=' + height)
   block.height = height // replace string with int 
+  block.time = Date.parse(block.block.header.time)
   
   const num_txs = parseInt(block.block.header.num_txs, 10)
   console.log("Block " + block.height + ": txs=" + num_txs)
   if (USE_DATABASE) {
-    await db.insertBlock(block.height, block.block.header.time)
+    await db.insertBlock(block.height, block.time)
   }
   sendEvent("blocks", {
     height: block.height,
-    time: block.block.header.time
+    time: block.time,
+    hash: block.block.header.last_block_id.hash
   })
   if (num_txs > 0) {
     const txs = block.block.data.txs
@@ -264,13 +272,14 @@ const processBlock = async height => {
         for (var j=0; j<res64.events.length; j++) {
           const event = res64.events[j]
           if (event.type === "message") {
-            event.attributes.map(async a => {
+            for (var attr = 0; attr < event.attributes.length; attr++) {
+              const a = event.attributes[attr]
               const key = Buffer.from(a.key, 'base64').toString()
               if (a.value !== undefined) {
                 const value = Buffer.from(a.value, 'base64').toString()
                 await processEvent(block, result, key, value)
               }
-            })
+            }
           }
         }
       }
@@ -283,11 +292,11 @@ const processEvent = async (block, result, key, value) => {
   if (key === "mtm.MarketTick") {
     const consensus = parseFloat(result.consensus.amount)
     if (USE_DATABASE) {
-      await db.insertMarketTick(block.height, block.block.header.time, value, consensus)
+      await db.insertMarketTick(block.height, block.time, value, consensus)
     }
     sendEvent("market." + value, {
       height: block.height,
-      time: block.block.header.time,
+      time: block.time,
       consensus: consensus
     })
   }
@@ -408,6 +417,12 @@ server.on('connection', async client => {
     const id = env.id
     delete clients[id]
     delete ids[env.acct]
+    Object.keys(subscriptions).map(key => {
+      subscriptions[key] = subscriptions[key].reduce((acc, subid) => {
+        if (subid != id) acc.push(subid)
+        return acc
+      }, [])
+    })
     //const acct = env.acct
   })
   
@@ -624,7 +639,7 @@ const handleMessage = async (env, name, payload) => {
           msg: res
         }
       case 'posttx':
-        res = await new Promise(async outerResolve => {
+        res = await new Promise(async (outerResolve, outerReject) => {
           const pendingTx = {
             submitted: false,
             submit: async (acct, sequence) => {
@@ -637,38 +652,42 @@ const handleMessage = async (env, name, payload) => {
               const hex = Buffer.from(bytes).toString('hex')
               //console.log("bytes=" + hex)
               res = await queryTendermint('/broadcast_tx_sync?tx=0x' + hex)
-              const txres = await new Promise((resolve, reject) => {
-                const obj = {
-                  success: txres => {
-                    resolve(txres)
-                  },
-                  failure: err => {
-                    reject(err)
-                  },
-                  timedout: false,
-                  tries: 0
+              try {
+                const txres = await new Promise((resolve, reject) => {
+                  const obj = {
+                    success: txres => {
+                      resolve(txres)
+                    },
+                    failure: err => {
+                      reject(err)
+                    },
+                    timedout: false,
+                    tries: 0
+                  }
+                  setTimeout(() => {obj.timedout = true}, TXTIMEOUT)
+                  pending[res.hash] = obj
+                })
+                if (txres.tx_result.data !== null) {
+                  txres.tx_result.data = JSON.parse(Buffer.from(txres.tx_result.data, 'base64').toString())
                 }
-                setTimeout(() => {obj.timedout = true}, TXTIMEOUT)
-                pending[res.hash] = obj
-              })
-              if (txres.tx_result.data !== null) {
-                txres.tx_result.data = JSON.parse(Buffer.from(txres.tx_result.data, 'base64').toString())
-              }
-              if (txres.tx_result.events !== undefined) {
-                for (var i=0; i<txres.tx_result.events.length; i++) {
-                  var t = txres.tx_result.events[i]
-                  if (t.type === "message") {
-                    t.attributes = t.attributes.map(a => {
-                      return {
-                        key: Buffer.from(a.key, 'base64').toString(),
-                        value: Buffer.from(a.value, 'base64').toString()
-                      }
-                    })
+                if (txres.tx_result.events !== undefined) {
+                  for (var i=0; i<txres.tx_result.events.length; i++) {
+                    var t = txres.tx_result.events[i]
+                    if (t.type === "message") {
+                      t.attributes = t.attributes.map(a => {
+                        return {
+                          key: Buffer.from(a.key, 'base64').toString(),
+                          value: Buffer.from(a.value, 'base64').toString()
+                        }
+                      })
+                    }
                   }
                 }
+                outerResolve(txres)
+              } catch (err) {
+                console.log("TX failed: " + acct + ": sequence=" + sequence + " " + err.message) 
+                outerResolve(null)
               }
-        
-              outerResolve(txres)
             }
           }
           if (cache.accounts === undefined) {
