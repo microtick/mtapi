@@ -2,10 +2,16 @@ const ws = require('ws')
 const protocol = require('../lib/protocol.js')
 const axios = require('axios')
 const objecthash = require('object-hash')
-const { marshalTx, unmarshalTx } = require('./amino.js')
+const crypto = require('crypto')
+const { marshalTx } = require('./amino.js')
+const format = require('./format.js')
 const config = require('./config.js')
 
+// Set to true if you want blocks and events stored in mongo
 const USE_DATABASE = true
+// Set to true if the node has --pruning=nothing set so we can query historical balances
+const PRUNING_OFF = true
+
 if (USE_DATABASE) {
   var db = require('./database.js')
 }
@@ -17,7 +23,7 @@ process.on('unhandledRejection', error => {
   } else {
     console.log("promise rejection")
   }
-  process.exit(-1)
+  //process.exit(-1)
 });
 
 // Subscriptions (websocket)
@@ -28,8 +34,55 @@ const NEWBLOCK = "tm.event='NewBlock'"
 const TXTIMEOUT = config.timeout
 const pending = {}
 
-// Caching
+// REST calls to Tendermint and Cosmos through ABCI
+
+const queryTendermint = async url => {
+  const query = "http://" + tendermint + url
+  const res = await axios.get(query)
+  return res.data.result
+}
+
+const queryCosmos = async (path, height) => {
+  var query = "http://" + tendermint + '/abci_query?path="/custom' + path + '"'
+  if (height !== undefined) {
+    query = query + "&height=" + height
+  }
+  const res = await axios.get(query)
+  if (res.data.result.response.code !== 0) {
+    //console.log("query=" + query)
+    //console.log(JSON.stringify(res.data, null, 2))
+    const obj = JSON.parse(res.data.result.response.log)
+    throw new Error(obj.message)
+  }
+  if (res.data.result.response.value === null) {
+    throw new Error("Received null response")
+  } else {
+    const data = Buffer.from(res.data.result.response.value, 'base64')
+    return JSON.parse(data.toString())
+  }
+}
+
+const queryHistBalance = async (acct, height) => {
+  if (USE_DATABASE) {
+    const balance = await queryCosmos("/microtick/account/" + acct, height)
+    return parseFloat(balance.balance.amount)
+  } else {
+    return 0
+  }
+}
+
+// API query caching
 var cache = {}
+var txcounter = 0
+var curheight = 0
+
+const shortHash = hash => {
+  // uncomment this for shorthand hashes in logs
+  //return hash.slice(0,6)
+  return "'" + hash + "'"
+}
+
+// Tx sequencing
 
 const nextSequenceNumber = (acct, res) => {
   if (cache.accounts === undefined) {
@@ -54,9 +107,7 @@ setInterval(async () => {
   const accts = Object.keys(cache.accounts)
   accts.map(async acct => {
     const pool = cache.accounts[acct]
-    if (pool.queue === undefined || pool.pendingSequenceNumber === undefined) {
-      return
-    }
+    if (pool.queue === undefined || pool.pendingSequenceNumber === undefined) return
     if (pool.queue[pool.pendingSequenceNumber] !== undefined) {
       await pool.queue[pool.pendingSequenceNumber].submit(acct, pool.pendingSequenceNumber)
       delete pool.queue[pool.pendingSequenceNumber]
@@ -65,8 +116,10 @@ setInterval(async () => {
   })
 }, 100)
 
-// Added at subsciption time: mapping event -> []id
-const subscriptions = {}
+// Tendermint websocket (single connection for new blocks)
+
+// Added at subsciption time: mapping market -> []id
+const marketSubscriptions = {}
 // Maintained at connection: id -> client
 const clients = {}
 const ids = {}
@@ -116,27 +169,43 @@ const connect = async () => {
 connect()
 
 const dump_subscriptions = () => {
-  console.log("Subscription Summary")
-  Object.keys(subscriptions).map(key => {
-    console.log("  " + key + ": " + JSON.stringify(subscriptions[key]))
-  })
+  console.log("Active Connections:")
+  const accts = Object.keys(ids)
+  if (accts.length > 0) {
+    accts.map(acct => {
+      ids[acct].map(id => {
+        console.log("  Connection ID: [" + id + "] account: " + acct)
+      })
+    })
+  }
+  console.log("Active Market Subscriptions:")
+  const keys = Object.keys(marketSubscriptions)
+  if (keys.length > 0) {
+    keys.map(key => {
+      if (marketSubscriptions[key].length > 0) {
+        console.log("  " + key + " => " + JSON.stringify(marketSubscriptions[key]))
+      }
+    })
+  }
 }
 
+// Connected API clients
+
 const subscribe = (id, event) => {
-  console.log("Subscribe: " + id + ": " + event)
-  if (subscriptions[event] === undefined) {
-    subscriptions[event] = [id]
-  } else if (!subscriptions[event].includes(id)) {
-    subscriptions[event].push(id)
+  console.log("Subscribe: connection " + id + " => " + event)
+  if (marketSubscriptions[event] === undefined) {
+    marketSubscriptions[event] = [id]
+  } else if (!marketSubscriptions[event].includes(id)) {
+    marketSubscriptions[event].push(id)
   }
 }
   
 const unsubscribe = (id, event) => {
-  console.log("Unsubscribe: " + id + ": " + event)
-  if (subscriptions[event] === undefined) return
-  subscriptions[event] = subscriptions[event].reduce((acc, thisid) => {
+  console.log("Unsubscribe: connection " + id + " => " + event)
+  if (marketSubscriptions[event] === undefined) return
+  marketSubscriptions[event] = marketSubscriptions[event].reduce((acc, thisid) => {
     if (thisid !== id) {
-      acc.push(id)
+      acc.push(thisid)
     }
     return acc
   }, [])
@@ -145,32 +214,45 @@ const unsubscribe = (id, event) => {
 var syncing = false
 var chainHeight = 0
 
-const sendEvent = (event, payload) => {
+const broadcastBlock = block => {
   if (syncing) return
-  if (subscriptions[event] === undefined) return
-  const msg = apiProtocolQueue.createEvent(event, payload)
-  //console.log("Subscriptions:[" + event + "] " + subscriptions[event])
-  subscriptions[event].map(id => {
+  const msg = apiProtocol.createEvent('block', block.height, block)
+  Object.keys(clients).map(id => {
+    const client = clients[id] 
+    if (client !== undefined) {
+      console.log("  Event New Block => [" + id + "]")
+      client.send(msg)
+    }
+  })
+}
+
+const broadcastTick = (market, consensus) => {
+  if (syncing) return
+  if (marketSubscriptions[market] === undefined) return
+  const msg = apiProtocol.createEvent('tick', market, consensus)
+  //console.log("marketSubscriptions:[" + event + "] " + marketSubscriptions[event])
+  marketSubscriptions[market].map(id => {
     const client = clients[id]
     if (client !== undefined) {
-      console.log("Sending event: " + event + " => id "+ id)
+      console.log("  Event Market Tick: " + market + " => ["+ id + "]")
       client.send(msg)
-      return id
     }
   })
 }
 
 const sendAccountEvent = (acct, event, payload) => {
   if (syncing) return
-  if (subscriptions[event] === undefined) return
-  const msg = apiProtocolQueue.createEvent(event, payload)
-  //console.log("Subscriptions:[" + event + "] " + subscriptions[event])
+  if (format.fullTx[event] === undefined) return
+  const formatted = format.fullTx[event](payload)
+  const msg = apiProtocol.createEvent('account', event, formatted)
   if (ids[acct] !== undefined) {
-    const client = clients[ids[acct]]
-    if (client !== undefined) {
-      console.log("Sending event: " + event + " => acct "+ acct)
-      client.send(msg)
-    }
+    ids[acct].map(id => {
+      const client = clients[id]
+      if (client !== undefined) {
+        console.log("  Account Event: " + event + " => [" + id + "]")
+        client.send(msg)
+      }
+    })
   }
 }
 
@@ -182,6 +264,8 @@ const handleNewBlock = async obj => {
     await db.init(config.mongo, chainid)
     const dbHeight = await db.height()
     if (dbHeight < chainHeight - 1) {
+      //console.log("dbHeight=" + dbHeight)
+      //console.log("chainHeight=" + chainHeight)
       console.log("Syncing...")
       syncing = true
       for (var i=dbHeight + 1; i < chainHeight; i++) {
@@ -191,30 +275,16 @@ const handleNewBlock = async obj => {
       syncing = false
     }
   }
-  dump_subscriptions()
-  await processBlock(chainHeight)
-    
-  // Reset cache
-  const oldcache = cache
     
   cache = {
     accounts: {}
   }
-    
-  if (oldcache.accounts !== undefined) {
-    const keys = Object.keys(oldcache.accounts)
-    for (var i=0; i<keys.length; i++) {
-      const key = keys[i]
-      if (Object.keys(oldcache.accounts[key].queue).length > 0) {
-        console.log("Copying cache for acct: " + key)
-        cache.accounts[key] = oldcache.accounts[key]
-      }
-    }
-  }
+  
+  await processBlock(chainHeight)
     
   // Check pending Tx hashes
   const hashes = Object.keys(pending)
-  if (hashes.length > 25) {
+  if (hashes.length > 50) {
     console.log("Warning: " + hashes.length + " pending Txs")
   }
   hashes.map(async hash => {
@@ -225,10 +295,19 @@ const handleNewBlock = async obj => {
       if (pending[hash].tries > 2) {
         console.log("TX error: " + hash + " " + JSON.stringify(res.data.error))
         pending[hash].failure(res.data.error)
+        pending[hash].timedout = true
       }
     } else if (res.data.result !== undefined) {
-      console.log("TX success: " + hash)
-      pending[hash].success(res.data.result)
+      const result = res.data.result
+      if (result.tx_result.code !== 0) {
+        const log = JSON.parse(result.tx_result.log)
+        const log2 = JSON.parse(log[0].log)
+        console.log("TX failure: hash=" + shortHash(hash))
+        pending[hash].failure(log2)
+      } else {
+        console.log("TX success: hash=" + shortHash(hash))
+        pending[hash].success(res.data.result)
+      }
       pending[hash].timedout = true
     }
     if (pending[hash].timedout) {
@@ -239,6 +318,7 @@ const handleNewBlock = async obj => {
 }
 
 const processBlock = async height => {
+  curheight = height
   //console.log(JSON.stringify(obj, null, 2))
   const block = await queryTendermint('/block?height=' + height)
   const results = await queryTendermint('/block_results?height=' + height)
@@ -246,11 +326,15 @@ const processBlock = async height => {
   block.time = Date.parse(block.block.header.time)
   
   const num_txs = parseInt(block.block.header.num_txs, 10)
-  console.log("Block " + block.height + ": txs=" + num_txs)
-  if (USE_DATABASE) {
-    await db.insertBlock(block.height, block.time)
+  if (!syncing) {
+    console.log()
   }
-  sendEvent("blocks", {
+  console.log("Block " + block.height + ": txs=" + num_txs)
+  if (!syncing) {
+    dump_subscriptions()
+  }
+  if (!syncing) console.log("Events:")
+  broadcastBlock({
     height: block.height,
     time: block.time,
     hash: block.block.header.last_block_id.hash
@@ -260,134 +344,114 @@ const processBlock = async height => {
     for (var i=0; i<txs.length; i++) {
       //console.log("TX #" + i)
       const txb64 = txs[i]
-      //var bytes = Buffer.from(txb64, 'base64')
-      //var hash = crypto.createHash('sha256').update(bytes).digest('hex')
+      var bytes = Buffer.from(txb64, 'base64')
+      var hash = crypto.createHash('sha256').update(bytes).digest('hex').toUpperCase()
       const res64 = results.results.deliver_tx[i]
       if (res64.code === 0) {
         // Tx successful
+        const txstruct = {
+          events: {}
+        }
         if (res64.data !== null) {
-          var result = JSON.parse(Buffer.from(res64.data, 'base64').toString())
+          txstruct.result = JSON.parse(Buffer.from(res64.data, 'base64').toString())
           //console.log(JSON.stringify(result, null, 2))
         }
         for (var j=0; j<res64.events.length; j++) {
           const event = res64.events[j]
-          if (event.type === "message") {
-            for (var attr = 0; attr < event.attributes.length; attr++) {
-              const a = event.attributes[attr]
-              const key = Buffer.from(a.key, 'base64').toString()
-              if (a.value !== undefined) {
-                const value = Buffer.from(a.value, 'base64').toString()
-                await processEvent(block, result, key, value)
-              }
+          for (var attr = 0; attr < event.attributes.length; attr++) {
+            const a = event.attributes[attr]
+            const key = Buffer.from(a.key, 'base64').toString()
+            if (a.value !== undefined) {
+              const value = Buffer.from(a.value, 'base64').toString()
+              txstruct.events[key] = value
+              //await processEvent(block, result, key, value)
             }
+          }
+        }
+        //console.log("Result " + txstruct.module + " / " + txstruct.action + ": hash=" + shortHash(hash))
+        if (txstruct.events.module === "microtick") {
+          await processMicrotickTx(block, txstruct)
+        } 
+        if (txstruct.events.module === "bank" && txstruct.events.action === "send") {
+          const depositPayload = {
+            type: "deposit",
+            account: txstruct.events.recipient,
+            height: block.height,
+            amount: parseFloat(txstruct.events.amount) / 1000000.0,
+            time: block.time
+          }
+          if (PRUNING_OFF) {
+            depositPayload.balance = await queryHistBalance(txstruct.events.recipient, block.height)
+          }
+          const withdrawPayload = {
+            type: "withdraw",
+            account: txstruct.sender,
+            height: block.height,
+            amount: parseFloat(txstruct.events.amount) / 1000000.0,
+            time: block.time
+          }
+          if (PRUNING_OFF) {
+            withdrawPayload.balance = await queryHistBalance(txstruct.events.sender, block.height)
+          }
+          sendAccountEvent(txstruct.events.recipient, "deposit", depositPayload)
+          sendAccountEvent(txstruct.events.sender, "withdraw", withdrawPayload)
+          if (USE_DATABASE) {
+            db.insertAccountEvent(block.height, txstruct.events.recipient, "deposit", depositPayload)
+            db.insertAccountEvent(block.height, txstruct.events.sender, "withdraw", withdrawPayload)
           }
         }
       }
     }
   }
+  if (USE_DATABASE) {
+    await db.insertBlock(block.height, block.time)
+  }
 }
 
-const processEvent = async (block, result, key, value) => {
-  //console.log("key=" + key + " value=" + value)
-  if (key === "mtm.MarketTick") {
-    const consensus = parseFloat(result.consensus.amount)
+const processMicrotickTx = async (block, tx) => {
+  if (tx.result !== undefined) {
+    tx.result.height = block.height
+    tx.result.balance = {}
+  }
+  if (tx.events['mtm.MarketTick'] !== undefined) {
+    const market = tx.events['mtm.MarketTick']
+    const consensus = parseFloat(tx.result.consensus.amount)
     if (USE_DATABASE) {
-      await db.insertMarketTick(block.height, block.time, value, consensus)
+      await db.insertMarketTick(block.height, block.time, market, consensus)
     }
-    sendEvent("market." + value, {
+    broadcastTick(market, {
       height: block.height,
       time: block.time,
       consensus: consensus
     })
   }
-  if (key.startsWith("quote.")) {
-    //console.log("quote event: " + value)
-    const id = parseInt(key.slice(6), 10)
-    if (value === "event.update") {
-      if (USE_DATABASE) {
-        await db.insertQuoteEvent(block.height, id, {
-          spot: parseFloat(result.spot.amount),
-          premium: parseFloat(result.premium.amount),
-          active: true
-        })
+  Promise.all(Object.keys(tx.events).map(async e => {
+    if (e.startsWith("acct.")) {
+      const account = e.slice(5)
+      if (PRUNING_OFF) {
+        tx.result.balance[account] = await queryHistBalance(account, block.height)
       }
-    } else if (value === "event.create") {
-      const spot = parseFloat(result.spot.amount)
-      const premium = parseFloat(result.premium.amount)
-      if (USE_DATABASE) {
-        await db.newQuote(block.height, result.market, result.duration, id)
-        await db.insertQuoteEvent(db, block.height, id, {
-          spot: spot,
-          premium: premium,
-          create: true,
-          market: result.market,
-          duration: result.duration,
-          active: true
-        })
-      }
-    } else if (value === "event.cancel" || value === "event.final") {
-      if (USE_DATABASE) {
-        await db.removeQuote(block.height, result.market, result.duration, id)
-        await db.insertQuoteEvent(db, block.height, id, {
-          destroy: true,
-          active: false
-        })
-      }
-    } else if (value === "event.match") {
-      // do nothing
-    } else if (value === "event.deposit") {
-      // do nothing
-    } else {
-      throw new Error("Unknown event: " + value)
+      await db.insertAccountEvent(block.height, account, tx.events[e], tx.result)
+      sendAccountEvent(account, tx.events[e], tx.result)
     }
-  }
-  if (key.startsWith("trade.")) {
-    const id = parseInt(key.slice(6), 10)
-    //console.log("trade event: " + value)
-    if (value === "event.create") {
+  }))
+  Promise.all(Object.keys(tx.events).map(async e => {
+    if (e.startsWith("quote.")) {
+      const id = parseInt(e.slice(6), 10)
       if (USE_DATABASE) {
-        await db.insertTradeEvent(block.height, id, result)
+        await db.insertQuoteEvent(block.height, id, tx.events[e], tx.result)
       }
-    } else if (value === "event.settle") {
-      if (USE_DATABASE) {
-        await db.insertTradeEvent(block.height, id, result)
-      }
-    } else {
-      throw new Error("Unknown event: " + value)
     }
-  }
-  if (key.startsWith("acct.")) {
-    const acct = key.slice(5)
-    sendAccountEvent(acct, value, result)
-  }
+    if (e.startsWith("trade.")) {
+      const id = parseInt(e.slice(6), 10)
+      if (USE_DATABASE) {
+        await db.insertTradeEvent(block.height, id, tx.events[e], tx.result)
+      }
+    }
+  }))
 }
 
-// Client (REST calls to Tendermint and Cosmos through ABCI)
-
-const queryTendermint = async url => {
-  const query = "http://" + tendermint + url
-  const res = await axios.get(query)
-  return res.data.result
-}
-
-const queryCosmos = async path => {
-  const query = "http://" + tendermint + '/abci_query?path="/custom' + path + '"'
-  const res = await axios.get(query)
-  if (res.data.result.response.code !== 0) {
-    //console.log("query=" + query)
-    //console.log(JSON.stringify(res.data, null, 2))
-    const obj = JSON.parse(res.data.result.response.log)
-    throw new Error(obj.message)
-  }
-  if (res.data.result.response.value === null) {
-    throw new Error("Received null response")
-  } else {
-    const data = Buffer.from(res.data.result.response.value, 'base64')
-    return JSON.parse(data.toString())
-  }
-}
-
-// Server
+// API Server Listener
 
 var connectionId = 1
 
@@ -402,23 +466,27 @@ server.on('connection', async client => {
     id: connectionId++
   }
   
-  console.log("  Connect " + env.id)
   clients[env.id] = client
   
   client.on('message', async msg => {
-    const response = await apiProtocolQueue.process(env, msg)
+    const response = await apiProtocol.process(env, msg)
     if (response !== undefined) {
       client.send(response)
     }
   })
   
   client.on('close', () => {
-    console.log("  Disconnect " + env.id)
+    console.log("Disconnect " + env.id)
     const id = env.id
     delete clients[id]
-    delete ids[env.acct]
-    Object.keys(subscriptions).map(key => {
-      subscriptions[key] = subscriptions[key].reduce((acc, subid) => {
+    ids[env.acct] = ids[env.acct].reduce((acc, arrid) => {
+      if (arrid !== id) {
+        acc.push(arrid)
+      }
+      return acc
+    }, [])
+    Object.keys(marketSubscriptions).map(key => {
+      marketSubscriptions[key] = marketSubscriptions[key].reduce((acc, subid) => {
         if (subid != id) acc.push(subid)
         return acc
       }, [])
@@ -428,21 +496,23 @@ server.on('connection', async client => {
   
 })
 
-const apiProtocolQueue = new protocol(10000, async (env, name, payload) => {
+const apiProtocol = new protocol(10000, async (env, name, payload) => {
   return await handleMessage(env, name, payload)
 })
 
 const handleMessage = async (env, name, payload) => {
-  //console.log("  COMMAND " + env.id + " " + name + " " + JSON.stringify(payload))
+  if (name !== "posttx") {
+    var hash = objecthash({
+      name: name,
+      payload: payload
+    }) 
   
-  const hash = objecthash({
-    name: name,
-    payload: payload
-  }) 
-  
-  if (cache[hash] !== undefined) {
-    //console.log("Responding from cache: " + hash)
-    return cache[hash]
+    if (cache[hash] !== undefined) {
+      console.log("Responding from cache: [" + env.id + "] " + name + " " + JSON.stringify(payload))
+      return cache[hash]
+    } else {
+      console.log("API call: [" + env.id + "] " + name + " " + JSON.stringify(payload))
+    }
   }
   
   var returnObj
@@ -451,7 +521,11 @@ const handleMessage = async (env, name, payload) => {
     switch (name) {
       case 'connect':
         env.acct = payload.acct
-        ids[env.acct] = env.id
+        console.log("Incoming connection [" + env.id + "] account=" + env.acct + "'")
+        if (ids[env.acct] === undefined) {
+          ids[env.acct] = []
+        }
+        ids[env.acct].push(env.id)
         return {
           status: true
         }
@@ -469,29 +543,46 @@ const handleMessage = async (env, name, payload) => {
         res = await queryTendermint('/status')
         returnObj = {
           status: true,
+          chainid: res.node_info.network,
           block: parseInt(res.sync_info.latest_block_height, 10),
           timestamp: Math.floor(new Date(res.sync_info.latest_block_time).getTime() / 1000)
-        }
-        break
-      case 'getblock':
-        res = await queryTendermint('/block?height=' + payload.blockNumber)
-        returnObj = {
-          status: true,
-          block: res.block_meta
         }
         break
       case 'getacctinfo':
         res = await queryCosmos('/microtick/account/' + payload.acct)
         returnObj = {
           status: true,
-          info: res
+          info: {
+            account: res.account,
+            balance: parseFloat(res.balance.amount),
+            numquotes: res.numQuotes,
+            numtrades: res.numTrades,
+            activeQuotes: res.activeQuotes,
+            activeTrades: res.activeTrades,
+            quoteBacking: parseFloat(res.quoteBacking.amount),
+            tradeBacking: parseFloat(res.tradeBacking.amount),
+            settleBacking: parseFloat(res.settleBacking.amount)
+          }
         }
         break
       case 'getmarketinfo':
         res = await queryCosmos('/microtick/market/' + payload.market)
         returnObj = {
           status: true,
-          info: res
+          info: {
+            market: res.market,
+            consensus: parseFloat(res.consensus.amount),
+            sumBacking: parseFloat(res.sumBacking.amount),
+            sumWeight: parseFloat(res.sumWeight.amount),
+            orderBooks: res.orderBooks.map(ob => {
+              return {
+                sumBacking: parseFloat(ob.sumBacking.amount),
+                sumWeight: parseFloat(ob.sumWeight.amount),
+                insideCall: parseFloat(ob.insideCall.amount),
+                insidePut: parseFloat(ob.insidePut.amount)
+              }
+            })
+          }
         }
         break
       case 'getorderbookinfo':
@@ -499,50 +590,123 @@ const handleMessage = async (env, name, payload) => {
           payload.duration)
         returnObj = {
           status: true,
-          info: res
+          info: {
+            sumBacking: parseFloat(res.sumBacking.amount),
+            sumWeight: parseFloat(res.sumWeight.amount),
+            calls: res.calls,
+            puts: res.puts
+          }
         }
         break
       case 'getmarketspot':
         res = await queryCosmos('/microtick/consensus/' + payload.market)
         returnObj = {
           status: true,
-          info: res
+          info: {
+            market: res.market,
+            consensus: parseFloat(res.consensus.amount),
+            sumbacking: parseFloat(res.sumBacking.amount),
+            sumweight: parseFloat(res.sumWeight.amount)
+          }
         }
         break
-      case 'getquote':
+      case 'getlivequote':
         res = await queryCosmos('/microtick/quote/' + payload.id)
         returnObj = {
           status: true,
-          info: res
+          info: {
+            id: res.id,
+            market: res.market,
+            duration: res.duration,
+            provider: res.provider,
+            backing: parseFloat(res.backing.amount),
+            spot: parseFloat(res.spot.amount),
+            premium: parseFloat(res.premium.amount),
+            quantity: parseFloat(res.quantity.amount),
+            premiumAsCall: parseFloat(res.premiumAsCall.amount),
+            premiumAsPut: parseFloat(res.premiumAsPut.amount),
+            modified: Date.parse(res.modified),
+            canModify: Date.parse(res.canModify)
+          }
         }
         break
-      case 'gettrade':
+      case 'getlivetrade':
         res = await queryCosmos('/microtick/trade/' + payload.id)
         returnObj = {
           status: true,
+          info: {
+            id: res.id,
+            market: res.market,
+            duration: res.duration,
+            option: res.type,
+            long: res.long,
+            start: Date.parse(res.start),
+            expiration: Date.parse(res.expiration),
+            backing: parseFloat(res.backing.amount),
+            premium: parseFloat(res.premium.amount),
+            quantity: parseFloat(res.quantity.amount),
+            strike: parseFloat(res.strike.amount),
+            currentSpot: parseFloat(res.currentSpot.amount),
+            currentValue: parseFloat(res.currentValue.amount),
+            commission: parseFloat(res.commission.amount),
+            settleIncentive: parseFloat(res.settleIncentive.amount),
+            counterparties: res.counterparties.map(cp => {
+              return {
+                backing: parseFloat(cp.backing.amount),
+                premium: parseFloat(cp.premium.amount),
+                quantity: parseFloat(cp.quantity.amount),
+                final: cp.final,
+                short: cp.short,
+                quoted: {
+                  id: cp.quoted.id,
+                  premium: parseFloat(cp.quoted.premium.amount),
+                  quantity: parseFloat(cp.quoted.quantity.amount),
+                  spot: parseFloat(cp.quoted.spot.amount)
+                }
+              }
+            })
+          }
+        }
+        break
+      case 'gethistquote':
+        res = await db.queryHistQuote(payload.id, payload.startBlock, payload.endBlock)
+        returnObj = {
+          status: true,
           info: res
         }
         break
-      case 'history':
-        res = await doHistory(payload.query, payload.from, payload.to, payload.events)
+      case 'gethisttrade':
+        res = await db.queryHistTrade(payload.id)
+        res.curheight = curheight
         returnObj = {
           status: true,
-          history: res
+          info: res
         }
         break
-      case 'totalevents':
-        res = await queryTendermint("/tx_search?query=\"acct." + env.acct + 
-          " CONTAINS '.'\"&page=1&per_page=1")
+      case 'accountsync':
+        console.log("Sync requested: " + env.acct + " " + payload.startblock + ":" + payload.endblock)
+        res = await db.queryAccountHistory(env.acct, payload.startblock, payload.endblock)
+        res.map(ev => {
+          sendAccountEvent(env.acct, ev.type, ev.data)
+        })
         returnObj = {
-          status: true,
-          total: res.total_count
+          status: true
         }
         break
-      case 'pagehistory':
-        res = await pageHistory(env.acct, payload.page, payload.inc)
+      case 'accountledgersize':
+        res = await db.queryAccountTotalEvents(env.acct)
         returnObj = {
           status: true,
-          history: res
+          total: res
+        }
+        break
+      case 'accountledger':
+        res = await db.queryAccountLedger(env.acct, payload.page, payload.perPage)
+        returnObj = {
+          status: true,
+          page: res.map(el => {
+            return format.ledgerTx[el.type](env.acct, el.data)
+          })
         }
         break
       case 'markethistory':
@@ -593,6 +757,19 @@ const handleMessage = async (env, name, payload) => {
           status: true,
           msg: res
         }
+      case 'withdrawquote':
+        res = await queryCosmos("/microtick/generate/withdrawquote/" +
+          env.acct + "/" +
+          payload.id + "/" + 
+          payload.withdraw)
+        nextSequenceNumber(env.acct, res)
+        return {
+          status: true,
+          msg: {
+            height: curheight,
+            hash: res.hash
+          }
+        }
       case 'updatequote':
         res = await queryCosmos("/microtick/generate/updatequote/" + 
           env.acct + "/" +
@@ -642,9 +819,12 @@ const handleMessage = async (env, name, payload) => {
         res = await new Promise(async (outerResolve, outerReject) => {
           const pendingTx = {
             submitted: false,
+            txid: txcounter++,
             submit: async (acct, sequence) => {
               if (pendingTx.submitted) return
-              console.log("Submitting TX: " + acct + ": sequence=" + sequence) 
+              const txtype = payload.tx.value.msg[0].type
+              console.log("Posting [" + env.id + "] TX " + txtype + ": sequence=" + sequence) 
+              //console.log(JSON.stringify(payload, null, 2))
               pendingTx.submitted = true
               
               const bytes = marshalTx(payload.tx)
@@ -652,6 +832,15 @@ const handleMessage = async (env, name, payload) => {
               const hex = Buffer.from(bytes).toString('hex')
               //console.log("bytes=" + hex)
               res = await queryTendermint('/broadcast_tx_sync?tx=0x' + hex)
+              if (res.code !== 0) {
+                // error
+                const log = JSON.parse(res.log)
+                outerReject(log.message)
+                console.log("  failed: " + log.message)
+                return
+              } else {
+                console.log("  hash=" + shortHash(res.hash))
+              }
               try {
                 const txres = await new Promise((resolve, reject) => {
                   const obj = {
@@ -685,8 +874,8 @@ const handleMessage = async (env, name, payload) => {
                 }
                 outerResolve(txres)
               } catch (err) {
-                console.log("TX failed: " + acct + ": sequence=" + sequence + " " + err.message) 
-                outerResolve(null)
+                //console.log("TX failed: " + acct + ": sequence=" + sequence)
+                outerReject(err.message)
               }
             }
           }
@@ -709,122 +898,28 @@ const handleMessage = async (env, name, payload) => {
         })
         return {
           status: true,
-          info: res
+          info: {
+            height: res.height,
+            hash: res.hash
+          }
         }
     }
     
     // Save in cache
-    cache[hash] = returnObj
+    if (name !== "posttx") {
+      cache[hash] = returnObj
+    }
     
     return returnObj
     
   } catch (err) {
-    console.log(err.stack)
+    //console.log(err.message)
+    const msg = JSON.stringify(err)
+    console.log("API error: " + name + ": " + msg)
+    if (err.stack !== undefined) console.log(err.stack)
     return {
       status: false,
-      error: err.message
+      error: msg
     }
   }
 }
-
-const formatTx = (tx, whichEvents) => {
-  const height = parseInt(tx.height, 10)
-  
-  var data = {}
-  data.events = {}
-  if (tx.tx_result.data !== undefined) {
-    const str = Buffer.from(tx.tx_result.data, "base64").toString()
-    const json = JSON.parse(str)
-    data = Object.assign(data, json)
-  }
-  if (whichEvents != null && tx.tx_result.events !== undefined) {
-    tx.tx_result.events.map(event => {
-      whichEvents.map(which => {
-        const key = Buffer.from(event.key, "base64").toString()
-        if (which === key && event.value !== undefined) {
-          data.events[key] = Buffer.from(event.value, "base64").toString()
-        }
-      })
-    })
-  }
-  data.hash = tx.hash
-  data.txindex = tx.index
-  data.block = height
-  data.time = new Date(data.time).getTime()
-  return data
-}
-
-const doHistory = async (query, fromBlock, toBlock, whichEvents) => {
-  var page = 0
-  var count = 0
-  const perPage = 100
-  const history = []
-  var total_count = 0
-  
-  const baseurl = "/tx_search?query=\"" + query + " AND tx.height>" + fromBlock + " AND tx.height<" + toBlock + "\""
-  try {
-    do {
-      page++
-      const url = baseurl + "&page=" + page + "&per_page=" + perPage
-  
-      //const start = Date.now()
-      //console.log("query=" + url)
-      const res = await queryTendermint(url)
-      //const end = Date.now()
-      //console.log("done: " + (end - start) + "ms")
-      //console.log("res=" + JSON.stringify(res, null, 2))
-      //console.log("date=" + res.headers.date)
-      
-      total_count = res.total_count
-      //console.log("count=" + count + " total_count=" + total_count)
-      
-      const txs = res.txs
-      //console.log("txs=" + JSON.stringify(txs, null, 2))
-      //console.log("txs.length=" + txs.length)
-      
-      for (var i=0; i<txs.length; i++) {
-        const data = formatTx(txs[i], whichEvents)
-        data.index = count++
-        history.push(data)
-      } 
-      
-    } while (count < total_count)
-    
-    //console.log("cache range " + query + "=[" + cache.startBlock + "," + cache.endBlock + "]")
-    
-    return history
-    
-  } catch (err) {
-    console.log(err.stack)
-    console.log("Error in fetching history: " + err.message)
-    return null
-  }
-}
-
-const pageHistory = async (acct, page, inc) => {
-  //console.log("Fetching page " + page + "(" + inc + ")" + " for account " + acct)
-  const url = "/tx_search?query=\"acct." + acct + " CONTAINS '.'\"&page=" + page + 
-    "&per_page=" + inc
-    try {
-      const res = await queryTendermint(url)
-      const txs = res.txs
-      //console.log("txs=" + JSON.stringify(txs, null, 2))
-      //console.log("txs.length=" + txs.length)
-      
-      const ret = []
-      const which = [
-        "acct." + acct
-      ]
-      
-      for (var i=0; i<txs.length; i++) {
-        const data = formatTx(txs[i], which)
-        ret.push(data)
-      } 
-      return ret
-    } catch (err) {
-      console.log("Error fetching total account events: " + err.message)
-    }
-    return null
-}
-  
-  
