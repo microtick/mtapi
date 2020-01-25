@@ -376,13 +376,14 @@ const DB = {
       { $limit: 1 }
     ])
     const lastUpdate = await curs.toArray()
-    obj.updates = [
-      {
+    obj.updates = []
+    if (lastUpdate.length > 0) {
+      obj.updates.push({
         height: obj.range.startHeight,
         spot: parseFloat(lastUpdate[0].data.spot.amount),
         premium: parseFloat(lastUpdate[0].data.premium.amount)
-      }
-    ]
+      })
+    }
     // Query for last tick
     curs = await db.collection('ticks').aggregate([
       {
