@@ -12,6 +12,9 @@ const USE_DATABASE = true
 // Set to true if the node has --pruning=nothing set so we can query historical balances
 const PRUNING_OFF = true
 
+const LOG_API = false
+const LOG_TX = false
+
 if (USE_DATABASE) {
   var db = require('./database.js')
 }
@@ -258,9 +261,9 @@ const sendAccountEvent = (acct, event, payload) => {
 
 const handleNewBlock = async obj => {
   chainHeight = parseInt(obj.result.data.value.block.header.height, 10)
+  const chainid = obj.result.data.value.block.header.chain_id
   if (USE_DATABASE) {
     if (syncing) return
-    const chainid = obj.result.data.value.block.header.chain_id
     await db.init(config.mongo, chainid)
     const dbHeight = await db.height()
     if (dbHeight < chainHeight - 1) {
@@ -269,7 +272,7 @@ const handleNewBlock = async obj => {
       console.log("Syncing...")
       syncing = true
       for (var i=dbHeight + 1; i < chainHeight; i++) {
-        await processBlock(i)
+        await processBlock(chainid, i)
       }
       console.log("Done syncing...")
       syncing = false
@@ -280,7 +283,7 @@ const handleNewBlock = async obj => {
     accounts: {}
   }
   
-  await processBlock(chainHeight)
+  await processBlock(chainid, chainHeight)
     
   // Check pending Tx hashes
   const hashes = Object.keys(pending)
@@ -300,12 +303,13 @@ const handleNewBlock = async obj => {
     } else if (res.data.result !== undefined) {
       const result = res.data.result
       if (result.tx_result.code !== 0) {
+        //console.log(JSON.stringify(result), null, 2)
         const log = JSON.parse(result.tx_result.log)
         const log2 = JSON.parse(log[0].log)
         console.log("TX failure: hash=" + shortHash(hash))
         pending[hash].failure(log2)
       } else {
-        console.log("TX success: hash=" + shortHash(hash))
+        if (LOG_TX) console.log("TX success: hash=" + shortHash(hash))
         pending[hash].success(res.data.result)
       }
       pending[hash].timedout = true
@@ -317,7 +321,7 @@ const handleNewBlock = async obj => {
   })
 }
 
-const processBlock = async height => {
+const processBlock = async (chainid, height) => {
   curheight = height
   //console.log(JSON.stringify(obj, null, 2))
   const block = await queryTendermint('/block?height=' + height)
@@ -337,7 +341,8 @@ const processBlock = async height => {
   broadcastBlock({
     height: block.height,
     time: block.time,
-    hash: block.block.header.last_block_id.hash
+    hash: block.block.header.last_block_id.hash,
+    chainid: chainid
   })
   if (num_txs > 0) {
     const txs = block.block.data.txs
@@ -508,10 +513,10 @@ const handleMessage = async (env, name, payload) => {
     }) 
   
     if (cache[hash] !== undefined) {
-      console.log("Responding from cache: [" + env.id + "] " + name + " " + JSON.stringify(payload))
+      if (LOG_API) console.log("Responding from cache: [" + env.id + "] " + name + " " + JSON.stringify(payload))
       return cache[hash]
     } else {
-      console.log("API call: [" + env.id + "] " + name + " " + JSON.stringify(payload))
+      if (LOG_API) console.log("API call: [" + env.id + "] " + name + " " + JSON.stringify(payload))
     }
   }
   
@@ -839,7 +844,7 @@ const handleMessage = async (env, name, payload) => {
                 console.log("  failed: " + log.message)
                 return
               } else {
-                console.log("  hash=" + shortHash(res.hash))
+                if (LOG_TX) console.log("  hash=" + shortHash(res.hash))
               }
               try {
                 const txres = await new Promise((resolve, reject) => {
