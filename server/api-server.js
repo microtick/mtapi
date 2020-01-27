@@ -8,9 +8,9 @@ const format = require('./format.js')
 const config = require('./config.js')
 
 // Set to true if you want blocks and events stored in mongo
-const USE_DATABASE = true
+const USE_DATABASE = false
 // Set to true if the node has --pruning=nothing set so we can query historical balances
-const PRUNING_OFF = true
+const PRUNING_OFF = false
 
 const LOG_API = false
 const LOG_TX = false
@@ -436,7 +436,9 @@ const processMicrotickTx = async (block, tx) => {
       if (PRUNING_OFF) {
         tx.result.balance[account] = await queryHistBalance(account, block.height)
       }
-      await db.insertAccountEvent(block.height, account, tx.events[e], tx.result)
+      if (USE_DATABASE) {
+        await db.insertAccountEvent(block.height, account, tx.events[e], tx.result)
+      }
       sendAccountEvent(account, tx.events[e], tx.result)
     }
   }))
