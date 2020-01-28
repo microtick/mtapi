@@ -184,7 +184,7 @@ module.exports = {
   sign: (tx, wallet, params) => {
     const signature = sign(tx, wallet, params)
     return {
-      type: "auth/StdTx",
+      type: "cosmos-sdk/StdTx",
       value: createSignedTx(tx, signature)
     }
   },

@@ -2,8 +2,6 @@ const WebSocketClient = require('websocket').w3cwebsocket
 const wallet = require('./wallet.js')
 const protocol = require('./protocol.js')
 
-const NEWBLOCKKEY = "tm.event='NewBlock'"
-
 var client
 const connectServer = (url, onOpen, onMessage) => {
   
@@ -39,37 +37,41 @@ class API {
     this.url = url
     
     this.subscriptions = {}
-    this.subid = 0
-    this.submap = {}
+    this.blockHandlers = []
+    this.tickHandlers = []
+    this.accountHandlers = []
     
     this.protocol = new protocol(240000, async (env, name, payload) => {
       return await this.handleMessage(env, name, payload)
-    }, (env, name, payload) => {
-      //console.log("Event: " + name)
-      //console.log(JSON.stringify(payload, null, 2))
-      const tags = {}
-      if (name === "tm.event='NewBlock'") {
-        var data = payload
-      } else {
-        data = JSON.parse(Buffer.from(payload.data.value.TxResult.result.data, 'base64').toString())
-        data.block = payload.data.value.TxResult.height
-        payload.data.value.TxResult.result.tags.map(tag => {
-          const key = Buffer.from(tag.key, 'base64').toString()
-          tags[key] = Buffer.from(tag.value, 'base64').toString()
-          return null
-        })
-      }
-      if (this.subscriptions[name] !== undefined) {
-        this.subscriptions[name] = this.subscriptions[name].reduce((acc, id) => {
-          if (this.submap[id] !== undefined) {
-            this.submap[id].cb(data, tags)
-            acc.push(id)
+    }, async (env, msg) => {
+      if (msg.type === 'block') {
+        for (var i=0; i<this.blockHandlers.length; i++) {
+          const handler = this.blockHandlers[i] 
+          await handler(msg.payload)
+        }
+      } else if (msg.type === 'tick') {
+        //console.log("Event: " + name)
+        //console.log(JSON.stringify(payload, null, 2))
+        if (this.subscriptions[msg.name] === undefined) {
+          console.log("Warning: no subscription for tick: " + msg.name)
+        } else {
+          for (i=0; i<this.tickHandlers.length; i++) {
+            const handler = this.tickHandlers[i]
+            await handler(msg.name, msg.payload)
           }
-          return acc
-        }, [])
+        }
+      } else if (msg.type === 'account') {
+        for (i=0; i<this.accountHandlers.length; i++) {
+          const handler = this.accountHandlers[i]
+          await handler(msg.name, msg.payload)
+        }
       }
     }, str => {
-      client.send(str)
+      try {
+        client.send(str)
+      } catch (err) {
+        console.log("Send: " + err.message)
+      }
     })
     
     this.durationFromSeconds = seconds => {
@@ -93,6 +95,18 @@ class API {
       }
     }
   
+  }
+  
+  addBlockHandler(handler) {
+    this.blockHandlers.push(handler)
+  }
+  
+  addTickHandler(handler) {
+    this.tickHandlers.push(handler)
+  }
+  
+  addAccountHandler(handler) {
+    this.accountHandlers.push(handler)
   }
   
   async handleMessage(env, name, payload) {
@@ -121,8 +135,15 @@ class API {
         })
         if (!response.status) {
           reject()
-          throw new Error("Connect failed")
+          throw new Error("Connect: " + response.error)
         }
+        Object.keys(this.subscriptions).map(async key => {
+          if (this.subscriptions[key] > 0) {
+            this.subscriptions[key]--
+            console.log("Resubscribing: " + key)
+            await this.subscribe(key)
+          }
+        })
         resolve()
       }, async msg => {
         const response = await this.protocol.process(null, msg)
@@ -150,41 +171,32 @@ class API {
     }
   }
   
-  async subscribe(key, cb) {
+  async subscribe(key) {
     const response = await this.protocol.newMessage('subscribe', {
       key: key
     })
     if (!response.status) {
-      throw new Error("Subscription failed: " + response.error)
-    }
-    const id = this.subid++
-    this.submap[id] = {
-      key: key,
-      cb: cb
+      throw new Error("Subscription: " + response.error)
     }
     if (this.subscriptions[key] === undefined) {
-      this.subscriptions[key] = []
+      this.subscriptions[key] = 0
     }
-    this.subscriptions[key].push(id)
-    return id
+    this.subscriptions[key]++
   }
   
-  async unsubscribe(id) {
-    if (this.submap[id] === undefined) return
-    const key = this.submap[id].key
-    delete this.submap[id]
-    this.subscriptions[key] = this.subscriptions[key].reduce((acc, thisid) => {
-      if (thisid !== id) {
-        acc.push(id)
+  async unsubscribe(key) {
+    if (this.subscriptions[key] === undefined) return
+    this.subscriptions[key]--
+    if (this.subscriptions[key] <= 0) {
+      if (this.subscriptions[key] < 0) {
+        console.log("Warning: mismatched subscribe / unsubscribe: " + key)
       }
-      return acc
-    }, [])
-    if (this.subscriptions[key].length === 0) {
+      this.subscriptions[key] = 0
       const response = await this.protocol.newMessage('unsubscribe', {
         key: key
       })
       if (!response.status) {
-        throw new Error("Unsubscribe failed: " + response.error)
+        throw new Error("Unsubscribe: " + response.error)
       }
     }
   }
@@ -192,19 +204,9 @@ class API {
   async blockInfo() {
     const response = await this.protocol.newMessage('blockinfo')
     if (!response.status) {
-      throw new Error("Status request failed: " + response.error)
+      throw new Error("Status request: " + response.error)
     }
     return response
-  }
-  
-  async getBlock(blockNumber) {
-    const response = await this.protocol.newMessage('getblock', {
-      blockNumber: blockNumber
-    })
-    if (!response.status) {
-      throw new Error("Get block failed: " + response.error)
-    }
-    return response.block
   }
   
   async getAccountInfo(acct) {
@@ -212,7 +214,7 @@ class API {
       acct: acct
     })
     if (!response.status) {
-      throw new Error("Get account info failed: " + response.error)
+      throw new Error("Get account info: " + response.error)
     }
     return response.info
   }
@@ -222,7 +224,7 @@ class API {
       market: market
     })
     if (!response.status) {
-      throw new Error("Get market info failed: " + response.error)
+      throw new Error("Get market info: " + response.error)
     }
     return response.info
   }
@@ -233,7 +235,7 @@ class API {
       duration: dur
     })
     if (!response.status) {
-      throw new Error("Get order book info failed: " + response.error)
+      throw new Error("Get order book info: " + response.error)
     }
     return response.info
   }
@@ -243,73 +245,89 @@ class API {
       market: market
     })
     if (!response.status) {
-      throw new Error("Get market spot failed: " + response.error)
+      throw new Error("Get market spot: " + response.error)
     }
     return response.info
   }
   
-  async getQuote(id) {
-    const response = await this.protocol.newMessage('getquote', {
+  async getLiveQuote(id) {
+    const response = await this.protocol.newMessage('getlivequote', {
       id: id
     })
     if (!response.status) {
-      throw new Error("Get quote failed: " + response.error)
+      throw new Error("Get live quote: " + response.error)
     }
     return response.info
   }
   
   async canModify(id) {
-    const res = await this.getQuote(id)
-    const now = Date.now()
-    const canModify = Date.parse(res.canModify)
-    if (now >= canModify) {
+    const res = await this.getLiveQuote(id)
+    if (Date.now() >= res.canModify) {
       return true
     }
     return false
   }
   
-  async getTrade(id) {
-    const response = await this.protocol.newMessage('gettrade', {
+  async getLiveTrade(id) {
+    const response = await this.protocol.newMessage('getlivetrade', {
       id: id
     })
     if (!response.status) {
-      throw new Error("Get trade failed: " + response.error)
+      throw new Error("Get live trade: " + response.error)
     }
     return response.info
   }
   
-  async history(query, fromBlock, toBlock, whichTags) {
-    if (fromBlock < 0) fromBlock = 0
-    if (toBlock < fromBlock) toBlock = fromBlock
-    const response = await this.protocol.newMessage('history', {
-      query: query,
-      from: fromBlock,
-      to: toBlock,
-      tags: whichTags
+  async getHistoricalQuote(id, startBlock, endBlock) {
+    const response = await this.protocol.newMessage('gethistquote', {
+      id: id,
+      startBlock: startBlock,
+      endBlock: endBlock
     })
     if (!response.status) {
-      throw new Error("Get history failed: " + response.error)
+      throw new Error("Get historical quote: " + response.error)
+    }
+    return response.info
+  }
+  
+  async getHistoricalTrade(id) {
+    const response = await this.protocol.newMessage('gethisttrade', {
+      id: id
+    })
+    if (!response.status) {
+      throw new Error("Get historical trade: " + response.error)
+    }
+    return response.info
+  }
+  
+  async accountSync(startblock, endblock) {
+    const response = await this.protocol.newMessage('accountsync', {
+      startblock: startblock,
+      endblock: endblock
+    })
+    if (!response.status) {
+      throw new Error("Account sync: " + response.error)
     }
     return response.history
   }
   
-  async totalEvents(acct) {
-    const response = await this.protocol.newMessage('totalevents', {})
+  async accountLedgerSize() {
+    const response = await this.protocol.newMessage('accountledgersize')
     if (!response.status) {
-      throw new Error("Get total events failed: " + response.error)
+      throw new Error("Get account ledger size: " + response.error)
     }
     return response.total
   }
   
-  async pageHistory(acct, page, inc) {
-    const response = await this.protocol.newMessage('pagehistory', {
+  async accountLedger(page, perPage) {
+    const response = await this.protocol.newMessage('accountledger', {
       page: page,
-      inc: inc
+      perPage: perPage
     })
     if (!response.status) {
-      throw new Error("Get page history failed: " + response.error)
+      throw new Error("Get account ledger: " + response.error)
     }
-    return response.history
+    return response.page
   }
   
   async marketHistory(market, startblock, endblock, target) {
@@ -320,7 +338,7 @@ class API {
       target: target
     })
     if (!response.status) {
-      throw new Error("Get market history failed: " + response.error)
+      throw new Error("Get market history: " + response.error)
     }
     return response.history
   }
@@ -339,7 +357,7 @@ class API {
     })
     //console.log("res=" + JSON.stringify(res, null, 2))
     if (!res.status) {
-      throw new Error("Post Tx failed: " + res.error)
+      throw new Error("Post Tx: " + res.error)
     }
     return res.info
   }
@@ -349,7 +367,7 @@ class API {
       market: market
     })
     if (!data.status) {
-      throw new Error("Create market failed: " + data.error)
+      throw new Error("Create market: " + data.error)
     }
     return await this.postTx(data.msg)
   }
@@ -363,7 +381,7 @@ class API {
       premium: premium
     })
     if (!data.status) {
-      throw new Error("Create quote failed: " + data.error)
+      throw new Error("Create quote: " + data.error)
     }
     return await this.postTx(data.msg) 
   }
@@ -373,7 +391,7 @@ class API {
       id: id
     })
     if (!data.status) {
-      throw new Error("Cancel quote failed: " + data.error)
+      throw new Error("Cancel quote: " + data.error)
     }
     return await this.postTx(data.msg)
   }
@@ -384,7 +402,18 @@ class API {
       deposit: deposit
     })
     if (!data.status) {
-      throw new Error("Deposit quote failed: " + data.error)
+      throw new Error("Deposit quote: " + data.error)
+    }
+    return await this.postTx(data.msg)
+  }
+  
+  async withdrawQuote(id, withdraw) {
+    const data = await this.protocol.newMessage('withdrawquote', {
+      id: id,
+      withdraw: withdraw
+    })
+    if (!data.status) {
+      throw new Error("Deposit quote: " + data.error)
     }
     return await this.postTx(data.msg)
   }
@@ -396,7 +425,7 @@ class API {
       newpremium: newpremium
     })
     if (!data.status) {
-      throw new Error("Update quote failed: " + data.error)
+      throw new Error("Update quote: " + data.error)
     }
     return await this.postTx(data.msg)
   }
@@ -409,7 +438,7 @@ class API {
       quantity: quantity
     })
     if (!data.status) {
-      throw new Error("Market trade failed: " + data.error)
+      throw new Error("Market trade: " + data.error)
     }
     return await this.postTx(data.msg)
   }
@@ -423,7 +452,7 @@ class API {
       maxcost: maxcost
     })
     if (!data.status) {
-      throw new Error("Limit trade failed: " + data.error)
+      throw new Error("Limit trade: " + data.error)
     }
     return await this.postTx(data.msg)
   }
@@ -433,7 +462,7 @@ class API {
       id: id
     })
     if (!data.status) {
-      throw new Error("Settle trade failed: " + data.error)
+      throw new Error("Settle trade: " + data.error)
     }
     return await this.postTx(data.msg)
   }
@@ -441,13 +470,3 @@ class API {
 }
 
 module.exports = API
-/*
-async (ws, keys) => {
-  const api = new API(ws)
-  await api.init(keys)
-  await api.subscribe(NEWBLOCKKEY, payload => {
-    console.log("New block: " + payload.height.value.block.header.height + " " + payload.height.value.block.header.time) 
-  })
-  return api
-}
-*/
