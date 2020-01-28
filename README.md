@@ -2,10 +2,10 @@
 # Microtick API
 
 This API runs as a custom protocol through a single websocket connection between client and server.  On the server
-side, the connection is multiplexed depending on the request type:
+side, the connection is handled differently depending on the request type:
 
-  - websocket to Tendermint (subscriptions)
-  - REST to Tendermint (search, history)
+  - websocket to Tendermint (new block notifications)
+  - MongoDB (search, history)
   - REST to Tendermint ABCI query (cosmos queries, transactions)
 
 The server side complexity is hidden from the client app through the protocol which makes it simple to develop
@@ -71,24 +71,48 @@ where the wallet object is a previously returned object from api.getWallet()
 
 #### API Function calls
 
-##### Subscribe
+##### Subscriptions
+
+Subscriptions are handled by adding one or more event handler functions. The three
+types of event handlers are Block events, Tick events and Account events.
+
+Block updates are delivered automatically when the client connects to the API server.
+```
+api.addBlockHandler(block => {
+    // block is a JSON object { height, time, hash, chainid }
+})
 
 ```
-await api.subscribe(event, callback)
+
+Tick events must be subscribed to. Any number of subscriptions can be active simultaneously.
+```
+api.addTickHandler((market, tick) => {
+    // market is a string, tick contains the tick data { height, time, consensus }
+})
 ```
 
-- event - Tendermint event syntax, for example "tm.event='NewBlock'"
-- callback - function accepting one parameter - the event object
+Account events are delivered automatically. Possible account events are: deposit,
+withdraw, quote.cancel, quote.create, quote.deposit, quote.update, quote.withdraw,
+trade.long, trade.short, settle.long, settle.short and settle.finalize.
+```
+api.addAccountHandler((key, data) => {
+    // Key is th event type, data is the event data
+}
+```
 
-returns the subscription id
+```
+await api.subscribe(market)
+```
+
+- market - market identifier (ETHUSD, XBTUSD, etc)
 
 ##### Unsubscribe
 
 ```
-await api.unsubscribe(id)
+await api.unsubscribe(market)
 ```
 
-- id - subscription id returned from api.subscribe()
+- market - market identifier (ETHUSD, XBTUSD, etc)
 
 ##### Get Block Info
 
@@ -139,10 +163,10 @@ const info = await api.getMarketSpot(market)
 
 returns an abbreviated object containing consensus price and overview information on a Microtick market
 
-##### Get Quote
+##### Get Live Quote
 
 ```
-const quote = await api.getQuote(id)
+const quote = await api.getLiveQuote(id)
 ```
 
 - id - quote id to fetch
@@ -158,13 +182,61 @@ const canModify = await api.canModify(id)
 returns a boolean value, **true** if the quote can be modified, **false** if not.  Quotes can not be modified
 for immediately, there is a settling time that is specified in the genesis block parameters.
 
-##### Get Trade
+##### Get Live Trade
 
 ```
-const trade = await api.getTrade(id)
+const trade = await api.getLiveTrade(id)
 ```
 
 - id - trade id to fetch
+
+##### Get Historical Quote
+
+```
+const quote = await api.getHisoricalQuote(id, startBlock, endBlock)
+```
+
+- id - quote id to fetch
+- startBlock, endBlock - optional, if supplied startBlock and endBlock specify
+the range for historical quote updates to be retrieved
+
+##### Get Historical Trade
+
+```
+const trade = await api.getHistoricalTrade(id)
+```
+
+- id - trade id to fetch
+
+##### Account Sync
+
+```
+api.accountSync(startBlock, endBlock)
+```
+
+- startBlock, endBlock - range of historical account events to sync with, for
+example a GUI may want the active trades up to the last 12 hours.
+
+##### Account Ledger
+
+```
+const ledger = api.accountLedger(page, perPage)
+```
+
+Returns an array of ledger entries for an account.  Page is the page number
+to be fetched and perPage is the number of entries per page.  Use with
+api.accountLedgerSize() which returns the total number of account events.
+
+##### Market History
+
+```
+const history = api.marketHistory(market, startBlock, endBlock, target)
+```
+
+- market - market id 
+- startBlock, endBlock - range to query historical tick data for
+- target - (optional) if supplied, specifies the number of ticks desired. the
+function will interpolate the results if there are many more ticks than desired.
 
 ##### Create Market
 
@@ -215,6 +287,15 @@ await api.depositQuote(id, amount)
 
 - id - the quote id
 - amount - amount of tokens to add to the quote's backing, i.e. "2fox"
+
+##### Withdraw Quote
+
+```
+await api.withdrawQuote(id, amount)
+```
+
+- id - the quote id
+- amount - amount of tokens to withdraw from the quote's backing, i.e. "2fox"
 
 ##### Update Quote
 
