@@ -305,9 +305,14 @@ const handleNewBlock = async obj => {
       if (result.tx_result.code !== 0) {
         //console.log(JSON.stringify(result), null, 2)
         const log = JSON.parse(result.tx_result.log)
-        const log2 = JSON.parse(log[0].log)
-        console.log("TX failure: hash=" + shortHash(hash))
-        pending[hash].failure(log2)
+        if (log.length > 0) {
+          const log2 = JSON.parse(log[0].log)
+          console.log("TX failure: hash=" + shortHash(hash))
+          pending[hash].failure(log2)
+        } else {
+          console.log("TX failure")
+          pending[hash].failure("TX failed")
+        }
       } else {
         if (LOG_TX) console.log("TX success: hash=" + shortHash(hash))
         pending[hash].success(res.data.result)
