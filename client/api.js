@@ -467,6 +467,14 @@ class API {
     return await this.postTx(data.msg)
   }
   
+  async postEnvelope() {
+    const data = await this.protocol.newMessage('postenvelope')
+    if (!data.status) {
+      throw new Error("Post envelope: " + data.error)
+    }
+    return data.msg
+  }
+  
 }
 
 module.exports = API

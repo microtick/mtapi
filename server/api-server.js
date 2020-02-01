@@ -825,6 +825,19 @@ const handleMessage = async (env, name, payload) => {
           status: true,
           msg: res
         }
+      case 'postenvelope':
+        // generate dummy create market tx to get the account number, sequence number and chain id
+        res = await queryCosmos("/microtick/generate/createmarket/" + 
+          env.acct + "/dmmmy")
+        nextSequenceNumber(env.acct, res)
+        return {
+          status: true,
+          msg: {
+            accountNumber: res.accountNumber,
+            chainId: res.chainId,
+            sequence: res.sequence
+          }
+        }
       case 'posttx':
         res = await new Promise(async (outerResolve, outerReject) => {
           const pendingTx = {
