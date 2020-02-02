@@ -8,9 +8,9 @@ const format = require('./format.js')
 const config = require('./config.js')
 
 // Set to true if you want blocks and events stored in mongo
-const USE_DATABASE = false
+const USE_DATABASE = true
 // Set to true if the node has --pruning=nothing set so we can query historical balances
-const PRUNING_OFF = false
+const PRUNING_OFF = true
 
 const LOG_API = false
 const LOG_TX = false
@@ -305,13 +305,17 @@ const handleNewBlock = async obj => {
       if (result.tx_result.code !== 0) {
         //console.log(JSON.stringify(result), null, 2)
         const log = JSON.parse(result.tx_result.log)
+        //console.log(JSON.stringify(log))
         if (log.length > 0) {
           const log2 = JSON.parse(log[0].log)
           console.log("TX failure: hash=" + shortHash(hash))
           pending[hash].failure(log2)
+        } else if (log.message !== undefined && log.message.includes("insufficient account funds")) {
+          console.log("Insufficient funds")
+          pending[hash].failure("Insufficient funds")
         } else {
           console.log("TX failure")
-          pending[hash].failure("TX failed")
+          pending[hash].failure(new Error("TX failed"))
         }
       } else {
         if (LOG_TX) console.log("TX success: hash=" + shortHash(hash))
@@ -899,8 +903,8 @@ const handleMessage = async (env, name, payload) => {
                 }
                 outerResolve(txres)
               } catch (err) {
-                //console.log("TX failed: " + acct + ": sequence=" + sequence)
-                outerReject(err.message)
+                console.log("TX failed: " + acct + ": sequence=" + sequence)
+                outerReject(err)
               }
             }
           }
@@ -938,13 +942,11 @@ const handleMessage = async (env, name, payload) => {
     return returnObj
     
   } catch (err) {
-    //console.log(err.message)
-    const msg = JSON.stringify(err)
-    console.log("API error: " + name + ": " + msg)
-    if (err.stack !== undefined) console.log(err.stack)
+    console.log("API error: " + name + ": " + err)
+    if (err !== undefined && err.stack !== undefined) console.log(err)
     return {
       status: false,
-      error: msg
+      error: err
     }
   }
 }
