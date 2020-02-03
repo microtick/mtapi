@@ -8,9 +8,9 @@ const format = require('./format.js')
 const config = require('./config.js')
 
 // Set to true if you want blocks and events stored in mongo
-const USE_DATABASE = true
+const USE_DATABASE = config.use_database 
 // Set to true if the node has --pruning=nothing set so we can query historical balances
-const PRUNING_OFF = true
+const PRUNING_OFF = config.pruning_off
 
 const LOG_API = false
 const LOG_TX = false
