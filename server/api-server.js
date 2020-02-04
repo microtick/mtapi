@@ -310,9 +310,6 @@ const handleNewBlock = async obj => {
           const log2 = JSON.parse(log[0].log)
           console.log("TX failure: hash=" + shortHash(hash))
           pending[hash].failure(log2)
-        } else if (log.message !== undefined && log.message.includes("insufficient account funds")) {
-          console.log("Insufficient funds")
-          pending[hash].failure("Insufficient funds")
         } else {
           console.log("TX failure")
           pending[hash].failure(new Error("TX failed"))
@@ -942,11 +939,11 @@ const handleMessage = async (env, name, payload) => {
     return returnObj
     
   } catch (err) {
-    console.log("API error: " + name + ": " + err)
-    if (err !== undefined && err.stack !== undefined) console.log(err)
+    console.log("API error: " + name + ": " + err.message)
+    if (err !== undefined) console.log(err)
     return {
       status: false,
-      error: err
+      error: err.message
     }
   }
 }

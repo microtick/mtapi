@@ -357,7 +357,7 @@ class API {
     })
     //console.log("res=" + JSON.stringify(res, null, 2))
     if (!res.status) {
-      throw new Error("Post Tx: " + res.error)
+      throw new Error("Post tx: " + res.error)
     }
     return res.info
   }
@@ -438,7 +438,7 @@ class API {
       quantity: quantity
     })
     if (!data.status) {
-      throw new Error("Market trade: " + data.error)
+      throw new Error("Buy " + tradetype + ": " + data.error)
     }
     return await this.postTx(data.msg)
   }
@@ -452,7 +452,7 @@ class API {
       maxcost: maxcost
     })
     if (!data.status) {
-      throw new Error("Limit trade: " + data.error)
+      throw new Error("Buy " + tradetype + ": " + data.error)
     }
     return await this.postTx(data.msg)
   }
