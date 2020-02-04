@@ -940,7 +940,7 @@ const handleMessage = async (env, name, payload) => {
     
   } catch (err) {
     console.log("API error: " + name + ": " + err.message)
-    if (err !== undefined) console.log(err)
+    //if (err !== undefined) console.log(err)
     return {
       status: false,
       error: err.message
