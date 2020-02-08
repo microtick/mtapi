@@ -26,22 +26,14 @@ $ node api-server
 
 ### Installation
 
-1. Create the 'dist' directory
-
 ```
-$ ./build.sh
-```
-
-2. Move or copy the 'dist' directory to 'node_modules/mtapi'
-
-```
-$ mv dist <your_project_dir>/node_modules/mtapi
+npm install microtick
 ```
 
 ### Usage
 
 ```
-const API = require('mtapi')
+const API = require('microtick')
 const api = new API("http://localhost:1320")  // Assumes the API server is running on port 1320
 ```
 
