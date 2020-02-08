@@ -7,10 +7,10 @@ mkdir dist
 
 cat <<EOF > dist/package.json
 {
-  "name": "test",
-  "version": "1.0.0",
-  "description": "",
-  "main": "test.js",
+  "name": "microtick",
+  "version": "0.2.3",
+  "description": "Microtick API",
+  "main": "index.js",
   "dependencies": {
     "bech32": "^1.1.3",
     "bip32": "^2.0.3",
@@ -23,8 +23,8 @@ cat <<EOF > dist/package.json
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "author": "",
-  "license": "ISC"
+  "author": "Microtick",
+  "license": "MIT"
 }
 EOF
 

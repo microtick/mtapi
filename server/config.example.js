@@ -4,6 +4,5 @@ module.exports = {
     timeout: 30000,
     host: "localhost",
     port: 1320,
-    use_database: false,
-    pruning_off: false
+    use_database: false
 }

@@ -9,8 +9,9 @@ const config = require('./config.js')
 
 // Set to true if you want blocks and events stored in mongo
 const USE_DATABASE = config.use_database 
-// Set to true if the node has --pruning=nothing set so we can query historical balances
-const PRUNING_OFF = config.pruning_off
+
+// This seems to work regardless so disabling with default to true
+const PRUNING_OFF = true
 
 const LOG_API = false
 const LOG_TX = false
