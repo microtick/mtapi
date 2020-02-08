@@ -3,7 +3,7 @@ const protocol = require('../lib/protocol.js')
 const axios = require('axios')
 const objecthash = require('object-hash')
 const crypto = require('crypto')
-const { marshalTx } = require('./amino.js')
+const { marshalTx, unmarshalTx } = require('./amino.js')
 const format = require('./format.js')
 const config = require('./config.js')
 
@@ -194,7 +194,7 @@ const dump_subscriptions = () => {
 
 // Connected API clients
 
-const subscribe = (id, event) => {
+const subscribeMarket = (id, event) => {
   console.log("Subscribe: connection " + id + " => " + event)
   if (marketSubscriptions[event] === undefined) {
     marketSubscriptions[event] = [id]
@@ -203,7 +203,7 @@ const subscribe = (id, event) => {
   }
 }
   
-const unsubscribe = (id, event) => {
+const unsubscribeMarket = (id, event) => {
   console.log("Unsubscribe: connection " + id + " => " + event)
   if (marketSubscriptions[event] === undefined) return
   marketSubscriptions[event] = marketSubscriptions[event].reduce((acc, thisid) => {
@@ -360,6 +360,8 @@ const processBlock = async (chainid, height) => {
       const res64 = results.results.deliver_tx[i]
       if (res64.code === 0) {
         // Tx successful
+        const bytes = new Buffer(txb64, 'base64')
+        const baseTx = unmarshalTx(bytes)
         const txstruct = {
           events: {}
         }
@@ -386,20 +388,24 @@ const processBlock = async (chainid, height) => {
         if (txstruct.events.module === "bank" && txstruct.events.action === "send") {
           const depositPayload = {
             type: "deposit",
+            from: txstruct.events.sender,
             account: txstruct.events.recipient,
             height: block.height,
             amount: parseFloat(txstruct.events.amount) / 1000000.0,
-            time: block.time
+            time: block.time,
+            memo: baseTx.value.memo
           }
           if (PRUNING_OFF) {
             depositPayload.balance = await queryHistBalance(txstruct.events.recipient, block.height)
           }
           const withdrawPayload = {
             type: "withdraw",
-            account: txstruct.sender,
+            account: txstruct.events.sender,
+            to: txstruct.events.recipient,
             height: block.height,
             amount: parseFloat(txstruct.events.amount) / 1000000.0,
-            time: block.time
+            time: block.time,
+            memo: baseTx.value.memo
           }
           if (PRUNING_OFF) {
             withdrawPayload.balance = await queryHistBalance(txstruct.events.sender, block.height)
@@ -543,12 +549,12 @@ const handleMessage = async (env, name, payload) => {
           status: true
         }
       case 'subscribe':
-        subscribe(env.id, payload.key)
+        subscribeMarket(env.id, payload.key)
         return {
           status: true
         }
       case 'unsubscribe':
-        unsubscribe(env.id, payload.key)
+        unsubscribeMarket(env.id, payload.key)
         return {
           status: true
         }

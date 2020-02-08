@@ -7,7 +7,9 @@ module.exports = {
         height: rec.height,
         time: rec.time,
         account: rec.account,
-        amount: rec.amount
+        from: rec.from,
+        amount: rec.amount,
+        memo: rec.memo
       }
       return obj
     },
@@ -17,7 +19,9 @@ module.exports = {
         height: rec.height,
         time: rec.time,
         account: rec.account,
-        amount: rec.amount
+        to: rec.to,
+        amount: rec.amount,
+        memo: rec.memo
       }
       return obj
     },
