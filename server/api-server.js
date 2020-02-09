@@ -361,7 +361,7 @@ const processBlock = async (chainid, height) => {
       const res64 = results.results.deliver_tx[i]
       if (res64.code === 0) {
         // Tx successful
-        const bytes = new Buffer(txb64, 'base64')
+        const bytes = Buffer.from(txb64, 'base64')
         const baseTx = unmarshalTx(bytes)
         const txstruct = {
           events: {}
