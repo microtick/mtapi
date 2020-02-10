@@ -22,13 +22,13 @@ if (USE_DATABASE) {
 
 process.on('unhandledRejection', error => {
   if (error !== undefined) {
-    console.log('unhandled promise rejection: ', error.message);
+    console.log('unhandled promise rejection: ', error.message)
     console.log(error.stack)
   } else {
     console.log("promise rejection")
   }
   //process.exit(-1)
-});
+})
 
 // Subscriptions (websocket)
 const tendermint = config.tendermint
