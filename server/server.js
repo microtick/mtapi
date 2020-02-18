@@ -173,8 +173,8 @@ const connect = async () => {
 connect()
 
 const dump_subscriptions = () => {
-  console.log("Active Connections:")
   const accts = Object.keys(ids)
+  console.log(accts.length + " Active Connection(s):")
   if (accts.length > 0) {
     accts.map(acct => {
       ids[acct].map(id => {
@@ -182,8 +182,8 @@ const dump_subscriptions = () => {
       })
     })
   }
-  console.log("Active Market Subscriptions:")
   const keys = Object.keys(marketSubscriptions)
+  console.log(keys.length + " Market Subscription(s):")
   if (keys.length > 0) {
     keys.map(key => {
       if (marketSubscriptions[key].length > 0) {
@@ -414,8 +414,8 @@ const processBlock = async (chainid, height) => {
           sendAccountEvent(txstruct.events.recipient, "deposit", depositPayload)
           sendAccountEvent(txstruct.events.sender, "withdraw", withdrawPayload)
           if (USE_DATABASE) {
-            db.insertAccountEvent(block.height, txstruct.events.recipient, "deposit", depositPayload)
-            db.insertAccountEvent(block.height, txstruct.events.sender, "withdraw", withdrawPayload)
+            await db.insertAccountEvent(block.height, txstruct.events.recipient, "deposit", depositPayload)
+            await db.insertAccountEvent(block.height, txstruct.events.sender, "withdraw", withdrawPayload)
           }
         }
       }
@@ -464,8 +464,30 @@ const processMicrotickTx = async (block, tx) => {
     }
     if (e.startsWith("trade.")) {
       const id = parseInt(e.slice(6), 10)
+      const type = tx.events[e]
       if (USE_DATABASE) {
-        await db.insertTradeEvent(block.height, id, tx.events[e], tx.result)
+        await db.insertTradeEvent(block.height, id, type, tx.result)
+        if (type === "event.create") {
+          const trade = tx.result.trade
+          const start = Math.floor(Date.parse(trade.start) / 1000)
+          const end = Math.floor(Date.parse(trade.expiration) / 1000)
+          await db.insertAction(id, trade.long, start, end, parseFloat(trade.cost.amount), 0)
+          for (var i=0; i<trade.counterparties.length; i++) {
+            const cp = trade.counterparties[i]
+            await db.insertAction(id, cp.short, start, end, 0, parseFloat(cp.premium.amount))
+          }
+        }
+        if (type === "event.settle") {
+          const trade = tx.result
+          const amt = parseFloat(trade.settle.amount)
+          if (amt > 0) {
+            await db.updateAction(id, trade.long, 0, parseFloat(trade.settle.amount))
+            for (i=0; i<trade.counterparties.length; i++) {
+              const cp = trade.counterparties[i]
+              await db.updateAction(id, cp.short, parseFloat(cp.settle.amount), 0)
+            }
+          }
+        }
       }
     }
   }))
@@ -582,6 +604,26 @@ const handleMessage = async (env, name, payload) => {
             quoteBacking: parseFloat(res.quoteBacking.amount),
             tradeBacking: parseFloat(res.tradeBacking.amount),
             settleBacking: parseFloat(res.settleBacking.amount)
+          }
+        }
+        break
+      case 'getacctperf':
+        var start = payload.start
+        if (typeof start === "string") {
+          start = Math.floor(Date.parse(start) / 1000)
+        }
+        var end = payload.end
+        if (typeof end === "string") {
+          end = Math.floor(Date.parse(end) / 1000)
+        }
+        res = await db.queryAccountPerformance(payload.acct, start, end)
+        returnObj = {
+          status: true,
+          info: {
+            count: res.count,
+            debit: res.debit,
+            credit: res.credit,
+            percent: res.percent
           }
         }
         break

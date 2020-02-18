@@ -54,6 +54,7 @@ const DB = {
     await db.createCollection('account')
     await db.createCollection('quotes')
     await db.createCollection('trades')
+    await db.createCollection('actions')
     
     const counters = await db.collection('counters')
     if (await counters.find().count() === 0) {
@@ -117,6 +118,19 @@ const DB = {
       await db.collection('trades').createIndex({
         id: 1,
         height: 1
+      }, {
+        name: 'history'
+      })
+    }
+    
+    const hasActionsIndex = await db.collection('actions').indexExists('history')
+    if (!hasActionsIndex) {
+      console.log("Creating actions index")
+      await db.collection('actions').createIndex({
+        id: 1,
+        account: 1,
+        start: 1,
+        end: 1
       }, {
         name: 'history'
       })
@@ -203,6 +217,67 @@ const DB = {
       type: type,
       data: data
     })
+  },
+  
+  insertAction: async (id, account, start, end, debit, credit) => {
+    await db.collection('actions').insertOne({
+      id: id, 
+      account: account,
+      start: start,
+      end: end,
+      debit: debit,
+      credit: credit
+    })
+  },
+  
+  updateAction: async (id, account, debit, credit) => {
+    const obj = {}
+    if (debit !== 0) obj.debit = debit
+    if (credit !== 0) obj.credit = credit
+    console.log("updating: " + id + ": " + JSON.stringify(obj))
+    await db.collection('actions').updateOne({
+      id: id,
+      account: account
+    }, {
+      $set: obj
+    })
+  },
+  
+  queryAccountPerformance: async (account, start, end) => {
+    const curs = await db.collection('actions').aggregate([
+      {
+        $match: {
+          $and: [
+            { account: account },
+            { start: { "$gte": start }},
+            { end: { "$lte": end }}
+          ]
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          debit: { $sum: "$debit" },
+          credit: { $sum: "$credit" },
+          count: { $sum: 1 }
+        }
+      }
+    ])
+    if (await curs.hasNext()) {
+      const rec = await curs.next()
+      if (rec.debit > 0) {
+        return {
+          debit: rec.debit,
+          credit: rec.credit,
+          count: rec.count
+        }
+      }
+    }
+    return {
+      debit: 0,
+      credit: 0,
+      count: 0,
+    }
   },
   
   queryMarketHistory: async (market, startblock, endblock, target) => {

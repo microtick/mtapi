@@ -219,6 +219,18 @@ class API {
     return response.info
   }
   
+  async getAccountPerformance(acct, start, end) {
+    const response = await this.protocol.newMessage('getacctperf', {
+      acct: acct,
+      start: start,
+      end: end
+    })
+    if (!response.status) {
+      throw new Error("Get account performance: " + response.error)
+    }
+    return response.info
+  }
+  
   async getMarketInfo(market) {
     const response = await this.protocol.newMessage('getmarketinfo', {
       market: market
