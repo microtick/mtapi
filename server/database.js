@@ -35,7 +35,7 @@ const DB = {
   
   inited: false,
   
-  init: async (url, chainid) => {
+  init: async (url, chainid, chainheight) => {
     if (this.inited) return
     
     console.log("Initializing database module")
@@ -46,6 +46,16 @@ const DB = {
     
     await mongo_reconnect(this.url)
     db = mongo.db(this.chainid)
+    
+    const maxHeight = await db.collection('blocks').findOne({},{sort:[['height',-1]]})
+    if (maxHeight !== null) {
+      if (maxHeight.height > chainheight) {
+        // must have restarted chain
+        console.log("DB height (" + maxHeight.height + ") > chain height (" + chainheight + ")")
+        console.log("Dropping database...")
+        await db.dropDatabase()
+      }
+    }
     
     await db.createCollection('meta', { capped: true, max: 1, size: 4096 })
     await db.createCollection('counters', { capped: true, max: 1, size: 4096 })
@@ -219,14 +229,33 @@ const DB = {
     })
   },
   
-  insertAction: async (id, account, start, end, debit, credit) => {
-    await db.collection('actions').insertOne({
+  insertAction: async (id, cp, account, start, end, debit, credit) => {
+    const obj = {
       id: id, 
       account: account,
+      position: cp,
       start: start,
       end: end,
       debit: debit,
       credit: credit
+    }
+    // handle duplicate short trade entries
+    const curs = await db.collection('actions').find({
+      id: id,
+      account: account
+    })
+    if (await curs.hasNext()) {
+      const rec = curs.next()
+      obj.debit += debit
+      obj.credit += credit
+    }
+    await db.collection('actions').updateOne({
+      id: id,
+      account: account
+    }, {
+      $set: obj
+    }, {
+      upsert: true
     })
   },
   

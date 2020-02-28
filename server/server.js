@@ -265,7 +265,7 @@ const handleNewBlock = async obj => {
   const chainid = obj.result.data.value.block.header.chain_id
   if (USE_DATABASE) {
     if (syncing) return
-    await db.init(config.mongo, chainid)
+    await db.init(config.mongo, chainid, chainHeight)
     const dbHeight = await db.height()
     if (dbHeight < chainHeight - 1) {
       //console.log("dbHeight=" + dbHeight)
@@ -471,10 +471,10 @@ const processMicrotickTx = async (block, tx) => {
           const trade = tx.result.trade
           const start = Math.floor(Date.parse(trade.start) / 1000)
           const end = Math.floor(Date.parse(trade.expiration) / 1000)
-          await db.insertAction(id, trade.long, start, end, parseFloat(trade.cost.amount), 0)
+          await db.insertAction(id, "long", trade.long, start, end, parseFloat(trade.cost.amount), 0)
           for (var i=0; i<trade.counterparties.length; i++) {
             const cp = trade.counterparties[i]
-            await db.insertAction(id, cp.short, start, end, 0, parseFloat(cp.premium.amount))
+            await db.insertAction(id, "short", cp.short, start, end, 0, parseFloat(cp.premium.amount))
           }
         }
         if (type === "event.settle") {
