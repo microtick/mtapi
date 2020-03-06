@@ -8,7 +8,7 @@ mkdir dist
 cat <<EOF > dist/package.json
 {
   "name": "microtick",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Microtick API",
   "main": "index.js",
   "dependencies": {
