@@ -521,12 +521,14 @@ server.on('connection', async client => {
     console.log("Disconnect " + env.id)
     const id = env.id
     delete clients[id]
-    ids[env.acct] = ids[env.acct].reduce((acc, arrid) => {
-      if (arrid !== id) {
-        acc.push(arrid)
-      }
-      return acc
-    }, [])
+    if (ids[env.acct] !== undefined) {
+      ids[env.acct] = ids[env.acct].reduce((acc, arrid) => {
+        if (arrid !== id) {
+          acc.push(arrid)
+        }
+        return acc
+      }, [])
+    }
     Object.keys(marketSubscriptions).map(key => {
       marketSubscriptions[key] = marketSubscriptions[key].reduce((acc, subid) => {
         if (subid != id) acc.push(subid)
