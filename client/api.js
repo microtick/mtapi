@@ -469,6 +469,17 @@ class API {
     return await this.postTx(data.msg)
   }
   
+  async pickTrade(id, tradetype) {
+    const data = await this.protocol.newMessage('picktrade', {
+      id: id,
+      tradetype: tradetype
+    })
+    if (!data.status) {
+      throw new Error("Buy " + tradetype + ": " + data.error)
+    }
+    return await this.postTx(data.msg)
+  }
+  
   async settleTrade(id) {
     const data = await this.protocol.newMessage('settletrade', {
       id: id

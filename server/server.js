@@ -870,6 +870,16 @@ const handleMessage = async (env, name, payload) => {
           status: true,
           msg: res
         }
+      case 'picktrade':
+        res = await queryCosmos("/microtick/generate/picktrade/" +
+          env.acct + "/" + 
+          payload.id + "/" + 
+          payload.tradetype)
+        nextSequenceNumber(env.acct, res)
+        return {
+          status: true,
+          msg: res
+        }
       case 'settletrade':
         res = await queryCosmos("/microtick/generate/settletrade/" +
           env.acct + "/" +
