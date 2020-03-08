@@ -288,44 +288,7 @@ const handleNewBlock = async obj => {
     
   // Check pending Tx hashes
   const hashes = Object.keys(pending)
-  if (hashes.length > 50) {
-    console.log("Warning: " + hashes.length + " pending Txs")
-  }
-  hashes.map(async hash => {
-    const url = "http://" + tendermint + "/tx?hash=0x" + hash
-    const res = await axios.get(url)
-    if (res.data.error !== undefined) {
-      pending[hash].tries++
-      if (pending[hash].tries > 2) {
-        console.log("TX error: " + hash + " " + JSON.stringify(res.data.error))
-        pending[hash].failure(res.data.error)
-        pending[hash].timedout = true
-      }
-    } else if (res.data.result !== undefined) {
-      const result = res.data.result
-      if (result.tx_result.code !== 0) {
-        //console.log(JSON.stringify(result), null, 2)
-        const log = JSON.parse(result.tx_result.log)
-        //console.log(JSON.stringify(log))
-        if (log.length > 0) {
-          const log2 = JSON.parse(log[0].log)
-          console.log("TX failure: hash=" + shortHash(hash))
-          pending[hash].failure(log2)
-        } else {
-          console.log("TX failure")
-          pending[hash].failure(new Error("TX failed"))
-        }
-      } else {
-        if (LOG_TX) console.log("TX success: hash=" + shortHash(hash))
-        pending[hash].success(res.data.result)
-      }
-      pending[hash].timedout = true
-    }
-    if (pending[hash].timedout) {
-      //console.log("Deleting pending TX: " + hash)
-      delete pending[hash]
-    }
-  })
+  console.log(hashes.length + " Pending TXs")
 }
 
 const processBlock = async (chainid, height) => {
@@ -359,6 +322,23 @@ const processBlock = async (chainid, height) => {
       var bytes = Buffer.from(txb64, 'base64')
       var hash = crypto.createHash('sha256').update(bytes).digest('hex').toUpperCase()
       const res64 = results.results.deliver_tx[i]
+      if (pending[hash] !== undefined) {
+        if (res64.code !== 0) {
+          const log = JSON.parse(res64.log)
+          //console.log(JSON.stringify(log))
+          if (log.length > 0) {
+            const log2 = JSON.parse(log[0].log)
+            console.log("TX failure: hash=" + shortHash(hash))
+            pending[hash].failure(log2)
+          } else {
+            console.log("TX failure")
+            pending[hash].failure(new Error("TX failed"))
+          }
+        } else {
+          pending[hash].success({ tx_result: res64 })
+        }
+        delete pending[hash]
+      }
       if (res64.code === 0) {
         // Tx successful
         const bytes = Buffer.from(txb64, 'base64')
