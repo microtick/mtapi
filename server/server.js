@@ -264,14 +264,17 @@ const handleNewBlock = async obj => {
   chainHeight = parseInt(obj.result.data.value.block.header.height, 10)
   const chainid = obj.result.data.value.block.header.chain_id
   if (USE_DATABASE) {
+    if (!db.inited) {
+      await db.init(config.mongo, chainid, chainHeight)
+    }
+    
     if (syncing) return
-    await db.init(config.mongo, chainid, chainHeight)
     const dbHeight = await db.height()
     if (dbHeight < chainHeight - 1) {
+      syncing = true
       //console.log("dbHeight=" + dbHeight)
       //console.log("chainHeight=" + chainHeight)
       console.log("Syncing...")
-      syncing = true
       for (var i=dbHeight + 1; i < chainHeight; i++) {
         await processBlock(chainid, i)
       }
@@ -299,7 +302,7 @@ const processBlock = async (chainid, height) => {
   block.height = height // replace string with int 
   block.time = Date.parse(block.block.header.time)
   
-  const num_txs = parseInt(block.block.header.num_txs, 10)
+  const num_txs = block.block.data.txs === null ? 0 : block.block.data.txs.length
   if (!syncing) {
     console.log()
   }
@@ -321,7 +324,7 @@ const processBlock = async (chainid, height) => {
       const txb64 = txs[i]
       var bytes = Buffer.from(txb64, 'base64')
       var hash = crypto.createHash('sha256').update(bytes).digest('hex').toUpperCase()
-      const res64 = results.results.deliver_tx[i]
+      const res64 = results.txs_results[i]
       if (pending[hash] !== undefined) {
         if (res64.code !== 0) {
           const log = JSON.parse(res64.log)
@@ -341,8 +344,7 @@ const processBlock = async (chainid, height) => {
       }
       if (res64.code === 0) {
         // Tx successful
-        const bytes = Buffer.from(txb64, 'base64')
-        const baseTx = unmarshalTx(bytes)
+        const baseTx = unmarshalTx(bytes, false)
         const txstruct = {
           events: {}
         }
@@ -809,10 +811,7 @@ const handleMessage = async (env, name, payload) => {
         nextSequenceNumber(env.acct, res)
         return {
           status: true,
-          msg: {
-            height: curheight,
-            hash: res.hash
-          }
+          msg: res
         }
       case 'updatequote':
         res = await queryCosmos("/microtick/generate/updatequote/" + 
@@ -891,19 +890,17 @@ const handleMessage = async (env, name, payload) => {
               if (pendingTx.submitted) return
               const txtype = payload.tx.value.msg[0].type
               console.log("Posting [" + env.id + "] TX " + txtype + ": sequence=" + sequence) 
-              //console.log(JSON.stringify(payload, null, 2))
               pendingTx.submitted = true
               
-              const bytes = marshalTx(payload.tx)
+              const bytes = marshalTx(payload.tx, false)
               //console.log(JSON.stringify(bytes))
               const hex = Buffer.from(bytes).toString('hex')
               //console.log("bytes=" + hex)
               res = await queryTendermint('/broadcast_tx_sync?tx=0x' + hex)
               if (res.code !== 0) {
                 // error
-                const log = JSON.parse(res.log)
-                outerReject(log.message)
-                console.log("  failed: " + log.message)
+                outerReject(new Error(res.log))
+                console.log("  failed: " + res.log)
                 return
               } else {
                 if (LOG_TX) console.log("  hash=" + shortHash(res.hash))

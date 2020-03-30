@@ -425,7 +425,7 @@ class API {
       withdraw: withdraw
     })
     if (!data.status) {
-      throw new Error("Deposit quote: " + data.error)
+      throw new Error("Withdraw quote: " + data.error)
     }
     return await this.postTx(data.msg)
   }
