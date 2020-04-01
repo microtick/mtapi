@@ -161,13 +161,19 @@ class API {
         }
       }, 100)
     })
+    
+    return {
+      acct: this.wallet.cosmosAddress,
+      pub: this.wallet.publicKey,
+      priv: this.wallet.privateKey
+    }
   }
   
   async getWallet() {
     return {
+      acct: this.wallet.cosmosAddress,
       pub: this.wallet.publicKey,
-      priv: this.wallet.privateKey,
-      acct: this.wallet.cosmosAddress
+      priv: this.wallet.privateKey
     }
   }
   
@@ -374,6 +380,14 @@ class API {
     return res.info
   }
   
+  async postEnvelope() {
+    const data = await this.protocol.newMessage('postenvelope')
+    if (!data.status) {
+      throw new Error("Post envelope: " + data.error)
+    }
+    return data.msg
+  }
+  
   async createMarket(market) {
     const data = await this.protocol.newMessage('createmarket', {
       market: market
@@ -488,14 +502,6 @@ class API {
       throw new Error("Settle trade: " + data.error)
     }
     return await this.postTx(data.msg)
-  }
-  
-  async postEnvelope() {
-    const data = await this.protocol.newMessage('postenvelope')
-    if (!data.status) {
-      throw new Error("Post envelope: " + data.error)
-    }
-    return data.msg
   }
   
 }

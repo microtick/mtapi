@@ -264,11 +264,14 @@ const handleNewBlock = async obj => {
   chainHeight = parseInt(obj.result.data.value.block.header.height, 10)
   const chainid = obj.result.data.value.block.header.chain_id
   if (USE_DATABASE) {
+    if (syncing) return
+    
     if (!db.inited) {
+      syncing = true
       await db.init(config.mongo, chainid, chainHeight)
+      syncing = false
     }
     
-    if (syncing) return
     const dbHeight = await db.height()
     if (dbHeight < chainHeight - 1) {
       syncing = true
@@ -871,7 +874,7 @@ const handleMessage = async (env, name, payload) => {
       case 'postenvelope':
         // generate dummy create market tx to get the account number, sequence number and chain id
         res = await queryCosmos("/microtick/generate/createmarket/" + 
-          env.acct + "/dmmmy")
+          env.acct + "/dummy")
         nextSequenceNumber(env.acct, res)
         return {
           status: true,
