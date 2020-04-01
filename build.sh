@@ -5,10 +5,13 @@
 rm -rf dist
 mkdir dist
 
+VERSION=`git describe --tags`
+echo "version=$VERSION"
+
 cat <<EOF > dist/package.json
 {
   "name": "microtick",
-  "version": "0.2.4",
+  "version": "$VERSION",
   "description": "Microtick API",
   "main": "index.js",
   "dependencies": {
