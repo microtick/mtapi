@@ -508,6 +508,9 @@ server.on('connection', async client => {
         }
         return acc
       }, [])
+      if (ids[env.acct].length === 0) {
+        delete ids[env.acct]
+      }
     }
     Object.keys(marketSubscriptions).map(key => {
       marketSubscriptions[key] = marketSubscriptions[key].reduce((acc, subid) => {
