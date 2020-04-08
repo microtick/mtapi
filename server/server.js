@@ -348,7 +348,6 @@ const processBlock = async (chainid, height) => {
         }
         if (res64.data !== null) {
           txstruct.result = JSON.parse(Buffer.from(res64.data, 'base64').toString())
-          //console.log(JSON.stringify(result, null, 2))
         }
         for (var j=0; j<res64.events.length; j++) {
           const event = res64.events[j]
@@ -593,23 +592,27 @@ const handleMessage = async (env, name, payload) => {
         }
         break
       case 'getacctperf':
-        var start = payload.start
-        if (typeof start === "string") {
-          start = Math.floor(Date.parse(start) / 1000)
-        }
-        var end = payload.end
-        if (typeof end === "string") {
-          end = Math.floor(Date.parse(end) / 1000)
-        }
-        res = await db.queryAccountPerformance(payload.acct, start, end)
-        returnObj = {
-          status: true,
-          info: {
-            count: res.count,
-            debit: res.debit,
-            credit: res.credit,
-            percent: res.percent
+        if (USE_DATABASE) {
+          var start = payload.start
+          if (typeof start === "string") {
+            start = Math.floor(Date.parse(start) / 1000)
           }
+          var end = payload.end
+          if (typeof end === "string") {
+            end = Math.floor(Date.parse(end) / 1000)
+          }
+          res = await db.queryAccountPerformance(payload.acct, start, end)
+          returnObj = {
+            status: true,
+            info: {
+              count: res.count,
+              debit: res.debit,
+              credit: res.credit,
+              percent: res.percent
+            }
+          }
+        } else {
+          throw new Error("Database turned off")
         }
         break
       case 'getmarketinfo':
@@ -716,53 +719,76 @@ const handleMessage = async (env, name, payload) => {
         }
         break
       case 'gethistquote':
-        res = await db.queryHistQuote(payload.id, payload.startBlock, payload.endBlock)
-        returnObj = {
-          status: true,
-          info: res
+        if (USE_DATABASE) {
+          res = await db.queryHistQuote(payload.id, payload.startBlock, payload.endBlock)
+          returnObj = {
+            status: true,
+            info: res
+          }
+        } else {
+          throw new Error("Database turned off")
         }
         break
       case 'gethisttrade':
-        res = await db.queryHistTrade(payload.id)
-        res.curheight = curheight
-        returnObj = {
-          status: true,
-          info: res
+        if (USE_DATABASE) {
+          res = await db.queryHistTrade(payload.id)
+          res.curheight = curheight
+          returnObj = {
+            status: true,
+            info: res
+          }
+        } else {
+          throw new Error("Database turned off")
         }
         break
       case 'accountsync':
-        console.log("Sync requested: " + env.acct + " " + payload.startblock + ":" + payload.endblock)
-        res = await db.queryAccountHistory(env.acct, payload.startblock, payload.endblock)
-        res.map(ev => {
-          sendAccountEvent(env.acct, ev.type, ev.data)
-        })
-        returnObj = {
-          status: true
+        if (USE_DATABASE) {
+          console.log("Sync requested: " + env.acct + " " + payload.startblock + ":" + payload.endblock)
+          res = await db.queryAccountHistory(env.acct, payload.startblock, payload.endblock)
+          res.map(ev => {
+            sendAccountEvent(env.acct, ev.type, ev.data)
+          })
+          returnObj = {
+            status: true
+          }
+        } else {
+          throw new Error("Database turned off")
         }
         break
       case 'accountledgersize':
-        res = await db.queryAccountTotalEvents(env.acct)
-        returnObj = {
-          status: true,
-          total: res
+        if (USE_DATABASE) {
+          res = await db.queryAccountTotalEvents(env.acct)
+          returnObj = {
+            status: true,
+            total: res
+          }
+          break
+        } else {
+          throw new Error("Database turned off")
         }
-        break
       case 'accountledger':
-        res = await db.queryAccountLedger(env.acct, payload.page, payload.perPage)
-        returnObj = {
-          status: true,
-          page: res.map(el => {
-            return format.ledgerTx[el.type](env.acct, el.data)
-          })
+        if (USE_DATABASE) {
+          res = await db.queryAccountLedger(env.acct, payload.page, payload.perPage)
+          returnObj = {
+            status: true,
+            page: res.map(el => {
+              return format.ledgerTx[el.type](env.acct, el.data)
+            })
+          }
+        } else {
+          throw new Error("Database turned off")
         }
         break
       case 'markethistory':
-        if (!USE_DATABASE) throw new Error('No market tick DB')
-        res = await db.queryMarketHistory(payload.market, payload.startblock,
-          payload.endblock, payload.target)
-        return {
-          status: true,
-          history: res
+        if (USE_DATABASE) {
+          res = await db.queryMarketHistory(payload.market, payload.startblock,
+            payload.endblock, payload.target)
+          return {
+            status: true,
+            history: res
+          }
+        } else {
+          throw new Error("Database turned off")
         }
       case 'createmarket':
         res = await queryCosmos("/microtick/generate/createmarket/" + 
@@ -900,7 +926,6 @@ const handleMessage = async (env, name, payload) => {
               const bytes = marshalTx(payload.tx)
               //console.log(JSON.stringify(bytes))
               const hex = Buffer.from(bytes).toString('hex')
-              //console.log("bytes=" + hex)
               res = await queryTendermint('/broadcast_tx_sync?tx=0x' + hex)
               if (res.code !== 0) {
                 // error
