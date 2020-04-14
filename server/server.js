@@ -215,6 +215,7 @@ const unsubscribeMarket = (id, event) => {
   }, [])
 }
 
+var processing = false
 var syncing = false
 var chainHeight = 0
 
@@ -261,17 +262,21 @@ const sendAccountEvent = (acct, event, payload) => {
 }
 
 const handleNewBlock = async obj => {
+  if (processing) return
+  if (syncing) return
+
+  processing = true
+
   chainHeight = parseInt(obj.result.data.value.block.header.height, 10)
   const chainid = obj.result.data.value.block.header.chain_id
   if (USE_DATABASE) {
-    if (syncing) return
     await db.init(config.mongo, chainid, chainHeight)
     const dbHeight = await db.height()
     if (dbHeight < chainHeight - 1) {
-      //console.log("dbHeight=" + dbHeight)
-      //console.log("chainHeight=" + chainHeight)
       console.log("Syncing...")
       syncing = true
+      //console.log("dbHeight=" + dbHeight)
+      //console.log("chainHeight=" + chainHeight)
       for (var i=dbHeight + 1; i < chainHeight; i++) {
         await processBlock(chainid, i)
       }
@@ -289,6 +294,8 @@ const handleNewBlock = async obj => {
   // Check pending Tx hashes
   const hashes = Object.keys(pending)
   console.log(hashes.length + " Pending TXs")
+
+  processing = false
 }
 
 const processBlock = async (chainid, height) => {
