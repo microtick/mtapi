@@ -363,8 +363,13 @@ const processBlock = async (chainid, height) => {
             const key = Buffer.from(a.key, 'base64').toString()
             if (a.value !== undefined) {
               const value = Buffer.from(a.value, 'base64').toString()
-              txstruct.events[key] = value
-              //await processEvent(block, result, key, value)
+              if (Array.isArray(txstruct.events[key])) {
+                if (!txstruct.events[key].includes(value)) txstruct.events[key].push(value)
+              } else if (txstruct.events[key] === undefined) {
+                txstruct.events[key] = value
+              } else if (txstruct.events[key] !== value) {
+                txstruct.events[key] = [ txstruct.events[key], value ]
+              }
             }
           }
         }
@@ -438,7 +443,13 @@ const processMicrotickTx = async (block, tx) => {
       if (USE_DATABASE) {
         await db.insertAccountEvent(block.height, account, tx.events[e], tx.result)
       }
-      sendAccountEvent(account, tx.events[e], tx.result)
+      if (Array.isArray(tx.events[e])) {
+        tx.events[e].map(x => {
+          sendAccountEvent(account, x, tx.result)
+        })
+      } else {
+        sendAccountEvent(account, tx.events[e], tx.result)
+      }
     }
   }))
   Promise.all(Object.keys(tx.events).map(async e => {
@@ -633,6 +644,7 @@ const handleMessage = async (env, name, payload) => {
             sumWeight: parseFloat(res.sumWeight.amount),
             orderBooks: res.orderBooks.map(ob => {
               return {
+                name: ob.name,
                 sumBacking: parseFloat(ob.sumBacking.amount),
                 sumWeight: parseFloat(ob.sumWeight.amount),
                 insideCall: parseFloat(ob.insideCall.amount),
@@ -937,7 +949,7 @@ const handleMessage = async (env, name, payload) => {
               if (res.code !== 0) {
                 // error
                 const log = JSON.parse(res.log)
-                outerReject(log.message)
+                outerReject(new Error(log.message))
                 console.log("  failed: " + log.message)
                 return
               } else {

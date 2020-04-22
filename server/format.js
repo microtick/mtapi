@@ -78,8 +78,6 @@ module.exports = {
         backing: parseFloat(rec.trade.backing.amount),
         cost: parseFloat(rec.trade.cost.amount),
         quantity: parseFloat(rec.trade.quantity.amount),
-        commission: parseFloat(rec.trade.commission.amount),
-        settleincentive: parseFloat(rec.trade.settleIncentive.amount),
         counterparties: rec.trade.counterparties.map(cp => {
           return {
             short: cp.short,
@@ -113,10 +111,7 @@ module.exports = {
             settle: parseFloat(cp.settle.amount),
             refund: parseFloat(cp.refund.amount)
           }
-        }),
-        settler: rec.settler,
-        incentive: parseFloat(rec.incentive.amount),
-        commission: parseFloat(rec.commission.amount)
+        })
       }
       return obj
     },
@@ -135,9 +130,45 @@ module.exports = {
             settle: parseFloat(cp.settle.amount),
             refund: parseFloat(cp.refund.amount)
           }
-        }),
-        settler: rec.settler,
+        })
+      }
+      return obj
+    },
+    "settle.finalize": rec => {
+      const obj = {  
+        event: "settle.finalize",
         incentive: parseFloat(rec.incentive.amount),
+        commission: parseFloat(rec.commission.amount)
+      }
+      return obj
+    },
+    "quote.create": rec => {
+      const obj = {
+        event: "quote.create",
+        backing: parseFloat(rec.backing.amount),
+        commission: parseFloat(rec.commission.amount)
+      }
+      return obj
+    },
+    "quote.deposit": rec => {
+      const obj = {
+        event: "quote.deposit",
+        backing: parseFloat(rec.backing.amount),
+        commission: parseFloat(rec.commission.amount)
+      }
+      return obj
+    },
+    "quote.update": rec => {
+      const obj = {
+        event: "quote.update",
+        commission: parseFloat(rec.commission.amount)
+      }
+      return obj
+    },
+    "quote.withdraw": rec => {
+      const obj = {
+        event: "quote.withdraw",
+        backing: parseFloat(rec.backing.amount),
         commission: parseFloat(rec.commission.amount)
       }
       return obj

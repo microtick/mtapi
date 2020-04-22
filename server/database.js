@@ -263,7 +263,6 @@ const DB = {
     const obj = {}
     if (debit !== 0) obj.debit = debit
     if (credit !== 0) obj.credit = credit
-    console.log("updating: " + id + ": " + JSON.stringify(obj))
     await db.collection('actions').updateOne({
       id: id,
       account: account

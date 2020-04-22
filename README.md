@@ -141,11 +141,11 @@ const info = await api.getMarketInfo(market)
 ##### Get Orderbook Info
 
 ```
-const info = await api.getOrderbookInfo(market, dur)
+const info = await api.getOrderbookInfo(market, duration)
 ```
 
 - market - Microtick market name
-- dur - Microtick duration, i.e. ('5minute', '15minute', '1hour', '4hour', '12hour')
+- duration - Microtick duration, i.e. ('5minute', '10minute', '15minute', '30minute', '1hour', '2hour', '4hour', '8hour', '12hour', '24hour')
 
 ##### Get Market Spot
 
@@ -247,9 +247,9 @@ const id = await api.createQuote(market, duration, backing, spot, premium)
 ```
 
 - market - market string, i.e. "ATOMUSD"
-- duration - Microtick duration, i.e. ('5minute', '15minute', '1hour', '4hour', '12hour')
-- backing - token amount, i.e. "10fox"
-- spot - spot value, i.e. "3.5spot"
+- duration - Microtick duration, i.e. ('5minute', '10minute', '15minute', '30minute', '1hour', '2hour', '4hour', '8hour', '12hour', '24hour')
+- backing - token amount, i.e. "10dai"
+- spot - spot value, i.e. "3.5spot
 - premium - option premium requested, i.e. "1premium"
 
 Creates a quote on the requested market, backed by the token amount, with a spot price specified, and the requested premium.
@@ -257,7 +257,7 @@ Note that the actual premium will be adjusted according to how close the quote i
 time a trade is made.  If the spot price is in the direction of the trade as compared to the consensus price, the premium will
 be adjusted up, i.e. the market maker will receive more premium than requested (generally a good thing).  If the spot price
 is in the opposite side of the consensus from the direction of the trade, the premium will be adjusted down, i.e. the market
-maker will receive fewer premium than requested.  Premium is paid in fox tokens.
+maker will receive fewer premium than requested.  Premium is paid in dai tokens.
 
 Returns the quote id
 
@@ -278,7 +278,7 @@ await api.depositQuote(id, amount)
 ```
 
 - id - the quote id
-- amount - amount of tokens to add to the quote's backing, i.e. "2fox"
+- amount - amount of tokens to add to the quote's backing, i.e. "2dai"
 
 ##### Withdraw Quote
 
@@ -287,7 +287,7 @@ await api.withdrawQuote(id, amount)
 ```
 
 - id - the quote id
-- amount - amount of tokens to withdraw from the quote's backing, i.e. "2fox"
+- amount - amount of tokens to withdraw from the quote's backing, i.e. "2dai"
 
 ##### Update Quote
 
@@ -306,7 +306,7 @@ const id = await api.marketTrade(market, duration, tradetype, quantity)
 ```
 
 - market - market string, i.e. "ATOMUSD"
-- duration - Microtick duration, i.e. ('5minute', '15minute', '1hour', '4hour', '12hour')
+- duration - Microtick duration, i.e. ('5minute', '10minute', '15minute', '30minute', '1hour', '2hour', '4hour', '8hour', '12hour', '24hour')
 - tradetype - can be "call" or "put"
 - quantity - quantity to fill
 
@@ -319,10 +319,10 @@ const id = await api.limitTrade(market, duration, tradetype, limit, maxcost)
 ```
 
  market - market string, i.e. "ATOMUSD"
-- duration - Microtick duration, i.e. ('5minute', '15minute', '1hour', '4hour', '12hour')
+- duration - Microtick duration, i.e. ('5minute', '10minute', '15minute', '30minute', '1hour', '2hour', '4hour', '8hour', '12hour', '24hour')
 - tradetype - can be "call" or "put"
 - limit - max premium you are willing to pay, i.e. "1.1premium" would match any option less than the specifed amount
-- maxcost - max number of tokens, i.e. "1fox".  the quantity for the trade will be adjusted so the total cost will be less than what is specified.
+- maxcost - max number of tokens, i.e. "1dai".  the quantity for the trade will be adjusted so the total cost will be less than what is specified.
 
 Returns the trade id
 

@@ -77,10 +77,15 @@ class API {
     this.durationFromSeconds = seconds => {
       switch (seconds) {
         case 300: return "5minute"
+        case 600: return "10minute"
         case 900: return "15minute"
+        case 1800: return "30minute"
         case 3600: return "1hour"
+        case 7200: return "2hour"
         case 14400: return "4hour"
+        case 28800: return "4hour"
         case 43200: return "12hour"
+        case 86400: return "1day"
       }
       throw new Error("Unknown duration")
     }
@@ -88,10 +93,15 @@ class API {
     this.secondsFromDuration = dur => {
       switch (dur) {
         case "5minute": return 300
+        case "10minute": return 600
         case "15minute": return 900
+        case "30minute": return 1800
         case "1hour": return 3600
+        case "2hour": return 7200
         case "4hour": return 14400
+        case "8hour": return 28800
         case "12hour": return 43200
+        case "1day": return 86400
       }
     }
   
@@ -369,7 +379,7 @@ class API {
     })
     //console.log("res=" + JSON.stringify(res, null, 2))
     if (!res.status) {
-      throw new Error("Post tx: " + res.error)
+      throw new Error("Post Tx: " + res.error)
     }
     return res.info
   }
