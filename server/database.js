@@ -145,6 +145,8 @@ const DB = {
         name: 'history'
       })
     }
+    
+    console.log("Database initialization complete")
   },
   
   height: async () => {
