@@ -51,11 +51,13 @@ const queryCosmos = async (path, height) => {
   if (height !== undefined) {
     query = query + "&height=" + height
   }
+  //console.log("query=" + query)
   const res = await axios.get(query)
   if (res.data.result.response.code !== 0) {
     //console.log("query=" + query)
     //console.log(JSON.stringify(res.data, null, 2))
-    const obj = JSON.parse(res.data.result.response.log)
+    const obj = res.data.result.response.log
+    //console.log(JSON.stringify(obj))
     throw new Error(obj.message)
   }
   if (res.data.result.response.value === null) {
@@ -338,16 +340,7 @@ const processBlock = async (chainid, height) => {
       const res64 = results.txs_results[i]
       if (pending[hash] !== undefined) {
         if (res64.code !== 0) {
-          const log = JSON.parse(res64.log)
-          //console.log(JSON.stringify(log))
-          if (log.length > 0) {
-            const log2 = JSON.parse(log[0].log)
-            console.log("TX failure: hash=" + shortHash(hash))
-            pending[hash].failure(log2)
-          } else {
-            console.log("TX failure")
-            pending[hash].failure(new Error("TX failed"))
-          }
+          pending[hash].failure(new Error(res64.log))
         } else {
           pending[hash].success({ tx_result: res64 })
         }
@@ -355,65 +348,69 @@ const processBlock = async (chainid, height) => {
       }
       if (res64.code === 0) {
         // Tx successful
-        const baseTx = unmarshalTx(bytes, false)
-        const txstruct = {
-          events: {}
-        }
-        if (res64.data !== null) {
-          txstruct.result = JSON.parse(Buffer.from(res64.data, 'base64').toString())
-        }
-        for (var j=0; j<res64.events.length; j++) {
-          const event = res64.events[j]
-          for (var attr = 0; attr < event.attributes.length; attr++) {
-            const a = event.attributes[attr]
-            const key = Buffer.from(a.key, 'base64').toString()
-            if (a.value !== undefined) {
-              const value = Buffer.from(a.value, 'base64').toString()
-              if (Array.isArray(txstruct.events[key])) {
-                if (!txstruct.events[key].includes(value)) txstruct.events[key].push(value)
-              } else if (txstruct.events[key] === undefined) {
-                txstruct.events[key] = value
-              } else if (txstruct.events[key] !== value) {
-                txstruct.events[key] = [ txstruct.events[key], value ]
+        try {
+          const baseTx = unmarshalTx(bytes, false)
+          const txstruct = {
+            events: {}
+          }
+          if (res64.data !== null) {
+            txstruct.result = JSON.parse(Buffer.from(res64.data, 'base64').toString())
+          }
+          for (var j=0; j<res64.events.length; j++) {
+            const event = res64.events[j]
+            for (var attr = 0; attr < event.attributes.length; attr++) {
+              const a = event.attributes[attr]
+              const key = Buffer.from(a.key, 'base64').toString()
+              if (a.value !== undefined) {
+                const value = Buffer.from(a.value, 'base64').toString()
+                if (Array.isArray(txstruct.events[key])) {
+                  if (!txstruct.events[key].includes(value)) txstruct.events[key].push(value)
+                } else if (txstruct.events[key] === undefined) {
+                  txstruct.events[key] = value
+                } else if (txstruct.events[key] !== value) {
+                  txstruct.events[key] = [ txstruct.events[key], value ]
+                }
               }
             }
           }
-        }
-        //console.log("Result " + txstruct.module + " / " + txstruct.action + ": hash=" + shortHash(hash))
-        if (txstruct.events.module === "microtick") {
-          await processMicrotickTx(block, txstruct)
-        } 
-        if (txstruct.events.module === "bank" && txstruct.events.action === "send") {
-          const depositPayload = {
-            type: "deposit",
-            from: txstruct.events.sender,
-            account: txstruct.events.recipient,
-            height: block.height,
-            amount: parseFloat(txstruct.events.amount) / 1000000.0,
-            time: block.time,
-            memo: baseTx.value.memo
+          //console.log("Result " + txstruct.module + " / " + txstruct.action + ": hash=" + shortHash(hash))
+          if (txstruct.events.module === "microtick") {
+            await processMicrotickTx(block, txstruct)
+          } 
+          if (txstruct.events.module === "bank" && txstruct.events.action === "send") {
+            const depositPayload = {
+              type: "deposit",
+              from: txstruct.events.sender,
+              account: txstruct.events.recipient,
+              height: block.height,
+              amount: parseFloat(txstruct.events.amount) / 1000000.0,
+              time: block.time,
+              memo: baseTx.value.memo
+            }
+            if (PRUNING_OFF) {
+              depositPayload.balance = await queryHistBalance(txstruct.events.recipient, block.height)
+            }
+            const withdrawPayload = {
+              type: "withdraw",
+              account: txstruct.events.sender,
+              to: txstruct.events.recipient,
+              height: block.height,
+              amount: parseFloat(txstruct.events.amount) / 1000000.0,
+              time: block.time,
+              memo: baseTx.value.memo
+            }
+            if (PRUNING_OFF) {
+              withdrawPayload.balance = await queryHistBalance(txstruct.events.sender, block.height)
+            }
+            sendAccountEvent(txstruct.events.recipient, "deposit", depositPayload)
+            sendAccountEvent(txstruct.events.sender, "withdraw", withdrawPayload)
+            if (USE_DATABASE) {
+              await db.insertAccountEvent(block.height, txstruct.events.recipient, "deposit", depositPayload)
+              await db.insertAccountEvent(block.height, txstruct.events.sender, "withdraw", withdrawPayload)
+            }
           }
-          if (PRUNING_OFF) {
-            depositPayload.balance = await queryHistBalance(txstruct.events.recipient, block.height)
-          }
-          const withdrawPayload = {
-            type: "withdraw",
-            account: txstruct.events.sender,
-            to: txstruct.events.recipient,
-            height: block.height,
-            amount: parseFloat(txstruct.events.amount) / 1000000.0,
-            time: block.time,
-            memo: baseTx.value.memo
-          }
-          if (PRUNING_OFF) {
-            withdrawPayload.balance = await queryHistBalance(txstruct.events.sender, block.height)
-          }
-          sendAccountEvent(txstruct.events.recipient, "deposit", depositPayload)
-          sendAccountEvent(txstruct.events.sender, "withdraw", withdrawPayload)
-          if (USE_DATABASE) {
-            await db.insertAccountEvent(block.height, txstruct.events.recipient, "deposit", depositPayload)
-            await db.insertAccountEvent(block.height, txstruct.events.sender, "withdraw", withdrawPayload)
-          }
+        } catch (err) {
+          console.log("UNKNOWN TX TYPE")
         }
       }
     }
@@ -1030,6 +1027,7 @@ const handleMessage = async (env, name, payload) => {
     
   } catch (err) {
     console.log("API error: " + name + ": " + err.message)
+    //console.log(err)
     //if (err !== undefined) console.log(err)
     return {
       status: false,
