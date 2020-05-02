@@ -1,3 +1,4 @@
+const fs = require('fs')
 const ws = require('ws')
 const protocol = require('../lib/protocol.js')
 const axios = require('axios')
@@ -5,7 +6,8 @@ const objecthash = require('object-hash')
 const crypto = require('crypto')
 const { marshalTx, unmarshalTx } = require('./amino.js')
 const format = require('./format.js')
-const config = require('./config.js')
+
+const config = JSON.parse(fs.readFileSync('./config.json'))
 
 // Set to true if you want blocks and events stored in mongo
 const USE_DATABASE = config.use_database 
