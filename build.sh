@@ -31,7 +31,7 @@ cat <<EOF > dist/package.json
 }
 EOF
 
-(cd dist && npm i)
+(cd dist && yarn install)
 
 cp client/api.js dist/index.js
 cp client/wallet.js dist
