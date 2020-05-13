@@ -6,7 +6,7 @@ const sha256 = require("crypto-js/sha256")
 const ripemd160 = require("crypto-js/ripemd160")
 const CryptoJS = require("crypto-js")
 
-const hdPathAtom = `m/44'/118'/0'/0/0`
+const hdPathAtom = `m/44'/118'/256'/0/0`
 
 const standardRandomBytesFunc = x => CryptoJS.lib.WordArray.random(x).toString()
 
@@ -17,7 +17,7 @@ async function generateWalletFromSeed(mnemonic) {
   return {
     privateKey: privateKey.toString(`hex`),
     publicKey: publicKey.toString(`hex`),
-    cosmosAddress
+    cosmosAddress: cosmosAddress
   }
 }
 
@@ -64,7 +64,7 @@ function deriveKeypair(masterKey) {
   }
 }
 
-function bech32ify(address, prefix) {
+ function bech32ify(address, prefix) {
   const words = bech32.toWords(address)
   return bech32.encode(prefix, words)
 }
@@ -111,7 +111,7 @@ function createSignMessage(jsonTx, sequence, account_number, chain_id) {
     gas: jsonTx.fee.gas
   }
 
-  return JSON.stringify(
+  const msg = JSON.stringify(
     prepareSignBytes({
       fee,
       memo: jsonTx.memo,
@@ -121,6 +121,7 @@ function createSignMessage(jsonTx, sequence, account_number, chain_id) {
       chain_id
     })
   )
+  return msg
 }
 
 // produces the signature for a message (returns Buffer)
@@ -181,6 +182,7 @@ function createBroadcastBody(signedTx) {
 
 module.exports = {
   generate: generateWallet,
+  prepare: createSignMessage,
   sign: (tx, wallet, params) => {
     const signature = sign(tx, wallet, params)
     return {

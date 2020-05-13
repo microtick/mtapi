@@ -993,24 +993,25 @@ const handleMessage = async (env, name, payload) => {
             txid: txcounter++,
             submit: async (acct, sequence) => {
               if (pendingTx.submitted) return
-              const txtype = payload.tx.value.msg[0].type
-              console.log("Posting [" + env.id + "] TX " + txtype + ": sequence=" + sequence) 
-              pendingTx.submitted = true
-              
-              const bytes = marshalTx(payload.tx, false)
-              //console.log(JSON.stringify(bytes))
-              const hex = Buffer.from(bytes).toString('hex')
-              res = await queryTendermint('/broadcast_tx_sync?tx=0x' + hex)
-              if (res.code !== 0) {
-                // error
-                const log = JSON.parse(res.log)
-                outerReject(new Error(log.message))
-                console.log("  failed: " + log.message)
-                return
-              } else {
-                if (LOG_TX) console.log("  hash=" + shortHash(res.hash))
-              }
               try {
+                const txtype = payload.tx.value.msg[0].type
+                console.log("Posting [" + env.id + "] TX " + txtype + ": sequence=" + sequence) 
+                pendingTx.submitted = true
+              
+                const bytes = marshalTx(payload.tx, false)
+                //console.log("bytes="  + JSON.stringify(bytes))
+                const hex = Buffer.from(bytes).toString('hex')
+                //console.log("hex=" + hex)
+                res = await queryTendermint('/broadcast_tx_sync?tx=0x' + hex)
+                console.log(JSON.stringify(res, null, 2))
+                if (res.code !== 0) {
+                  // error
+                  outerReject(new Error(res.log))
+                  console.log("  failed: " + res.log)
+                  return
+                } else {
+                  if (LOG_TX) console.log("  hash=" + shortHash(res.hash))
+                }
                 const txres = await new Promise((resolve, reject) => {
                   const obj = {
                     success: txres => {

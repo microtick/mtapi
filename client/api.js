@@ -2,6 +2,9 @@ const WebSocketClient = require('websocket').w3cwebsocket
 const wallet = require('./wallet.js')
 const protocol = require('./protocol.js')
 
+import TransportWebUSB from '@ledgerhq/hw-transport-webusb'
+import CosmosApp from 'ledger-cosmos-js'
+
 var client
 const connectServer = (url, onOpen, onMessage) => {
   
@@ -128,9 +131,24 @@ class API {
     if (keys === undefined) {
       console.log("Creating wallet")
       this.wallet = await wallet.generate()
+      this.wallet.type = "software"
+    } else if (keys === "ledger") {
+      const transport = await TransportWebUSB.create()
+      const app = new CosmosApp(transport)
+      const path = [44, 118, 256, 0, 0]
+      const response = await app.getAddressAndPubKey(path, "cosmos")
+      if (response.return_code !== 0x9000) {
+        throw new Error("Ledger initialization failed")
+      }
+      this.wallet = {
+        type: "ledger",
+        publicKey: response.compressed_pk.toString('hex'),
+        cosmosAddress: response.bech32_address,
+      }
     } else {
       console.log("Using wallet: " + keys.acct)
       this.wallet = {
+        type: "software",
         privateKey: keys.priv,
         publicKey: keys.pub,
         cosmosAddress: keys.acct
@@ -173,6 +191,7 @@ class API {
     })
     
     return {
+      type: this.wallet.type,
       acct: this.wallet.cosmosAddress,
       pub: this.wallet.publicKey,
       priv: this.wallet.privateKey
@@ -181,6 +200,7 @@ class API {
   
   async getWallet() {
     return {
+      type: this.wallet.type,
       acct: this.wallet.cosmosAddress,
       pub: this.wallet.publicKey,
       priv: this.wallet.privateKey
@@ -374,16 +394,56 @@ class API {
   // Transactions
   
   async postTx(msg) {
-    const signed = wallet.sign(msg.tx, this.wallet, {
-      sequence: msg.sequence,
-      account_number: msg.accountNumber,
-      chain_id: msg.chainId
-    })
+    if (this.wallet.type === "ledger") {
+      const transport = await TransportWebUSB.create()
+      const app = new CosmosApp(transport)
+      const path = [44, 118, 256, 0, 0]
+      const message = wallet.prepare(msg.tx, msg.sequence, msg.accountNumber, msg.chainId)
+      const response = await app.sign(path, message)
+      if (response.return_code !== 0x9000) {
+        throw new Error("Ledger transaction rejected")
+      }
+      var signature = response.signature
+      var sigBuf = Buffer.from(response.signature)
+      if (sigBuf[0] !== 0x30) {
+        throw new Error("ASN: invalid encoding")
+      }
+      sigBuf = sigBuf.slice(2, sigBuf[1] + 2)
+      if (sigBuf[0] !== 0x02) {
+        throw new Error("ASN: invalid encoding")
+      }
+      var r = sigBuf.slice(2, sigBuf[1] + 2)
+      if (r.length === 33) r = r.slice(1) // remove sign byte
+      const sIndex = sigBuf[1] + 2
+      if (sigBuf[sIndex] !== 2) {
+        throw new Error("ASN: invalid encoding")
+      }
+      var s = sigBuf.slice(sIndex+2, sIndex + sigBuf[sIndex+1] + 2)
+      if (s.length === 33) s = s.slice(1) // remove sign byte
+      sigBuf = Buffer.concat([r, s])
+      var signed = {
+        type: "cosmos-sdk/StdTx",
+        value: Object.assign({}, msg.tx, {
+          signatures: [{
+            signature: sigBuf.toString('base64'),
+            pub_key: {
+              type: 'tendermint/PubKeySecp256k1',
+              value: Buffer.from(this.wallet.publicKey, 'hex').toString('base64')
+            }
+          }]
+        })
+      }
+    } else {
+      signed = wallet.sign(msg.tx, this.wallet, {
+        sequence: msg.sequence,
+        account_number: msg.accountNumber,
+        chain_id: msg.chainId
+      })
+    }
     const res = await this.protocol.newMessage('posttx', {
       tx: signed,
       sequence: msg.sequence
     })
-    //console.log("res=" + JSON.stringify(res, null, 2))
     if (!res.status) {
       throw new Error("Post Tx: " + res.error)
     }
@@ -516,4 +576,4 @@ class API {
   
 }
 
-module.exports = API
+export default API
