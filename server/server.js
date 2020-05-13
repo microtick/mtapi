@@ -1003,7 +1003,6 @@ const handleMessage = async (env, name, payload) => {
                 const hex = Buffer.from(bytes).toString('hex')
                 //console.log("hex=" + hex)
                 res = await queryTendermint('/broadcast_tx_sync?tx=0x' + hex)
-                console.log(JSON.stringify(res, null, 2))
                 if (res.code !== 0) {
                   // error
                   outerReject(new Error(res.log))
