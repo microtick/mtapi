@@ -126,11 +126,13 @@ class API {
     console.log("handleMessage")
   }
   
-  async init(keys) {
+  async init(keys, cb) {
     // If keys passed in, use them, otherwise generate new account
-    if (keys === undefined) {
+    if (keys === "software") {
       console.log("Creating wallet")
-      this.wallet = await wallet.generate()
+      const mnemonic = await wallet.seed()
+      cb(mnemonic)
+      this.wallet = await wallet.generate(mnemonic)
       this.wallet.type = "software"
     } else if (keys === "ledger") {
       const transport = await TransportWebUSB.create()
@@ -145,6 +147,10 @@ class API {
         publicKey: response.compressed_pk.toString('hex'),
         cosmosAddress: response.bech32_address,
       }
+    } else if (Array.isArray(keys)) {
+      const mnemonic = keys.join(" ")
+      this.wallet = await wallet.generate(mnemonic)
+      this.wallet.type = "software"
     } else {
       console.log("Using wallet: " + keys.acct)
       this.wallet = {

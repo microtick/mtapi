@@ -181,7 +181,8 @@ function createBroadcastBody(signedTx) {
 }
 
 module.exports = {
-  generate: generateWallet,
+  seed: generateSeed,
+  generate: generateWalletFromSeed,
   prepare: createSignMessage,
   sign: (tx, wallet, params) => {
     const signature = sign(tx, wallet, params)
