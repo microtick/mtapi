@@ -61,7 +61,7 @@ const queryCosmos = async (path, height) => {
     //console.log(JSON.stringify(res.data, null, 2))
     const obj = res.data.result.response.log
     //console.log(JSON.stringify(obj))
-    throw new Error(obj.message)
+    throw new Error(obj)
   }
   if (res.data.result.response.value === null) {
     throw new Error("Received null response")
