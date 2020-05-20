@@ -2,9 +2,6 @@ const WebSocketClient = require('websocket').w3cwebsocket
 const wallet = require('./wallet.js')
 const protocol = require('./protocol.js')
 
-import TransportWebUSB from '@ledgerhq/hw-transport-webusb'
-import CosmosApp from 'ledger-cosmos-js'
-
 var client
 const connectServer = (url, onOpen, onMessage) => {
   
@@ -131,12 +128,12 @@ class API {
     if (keys === "software") {
       console.log("Creating wallet")
       const mnemonic = await wallet.seed()
-      cb(mnemonic)
+      if (typeof cb === "function") cb(mnemonic)
       this.wallet = await wallet.generate(mnemonic)
       this.wallet.type = "software"
     } else if (keys === "ledger") {
-      const transport = await TransportWebUSB.create()
-      const app = new CosmosApp(transport)
+      this.getApp = cb
+      const app = await this.getApp()
       const path = [44, 118, 256, 0, 0]
       const response = await app.getAddressAndPubKey(path, "cosmos")
       if (response.return_code !== 0x9000) {
@@ -161,6 +158,7 @@ class API {
       }
     }
     
+    const api = this
     await new Promise((resolve, reject) => {
       connectServer(this.url, async client => {
         this.client = client
@@ -171,6 +169,7 @@ class API {
           reject()
           throw new Error("Connect: " + response.error)
         }
+        api.markets = response.markets
         Object.keys(this.subscriptions).map(async key => {
           if (this.subscriptions[key] > 0) {
             this.subscriptions[key]--
@@ -211,6 +210,10 @@ class API {
       pub: this.wallet.publicKey,
       priv: this.wallet.privateKey
     }
+  }
+  
+  getMarkets() {
+    return this.markets
   }
   
   async subscribe(key) {
@@ -401,8 +404,7 @@ class API {
   
   async postTx(msg) {
     if (this.wallet.type === "ledger") {
-      const transport = await TransportWebUSB.create()
-      const app = new CosmosApp(transport)
+      const app = await this.getApp()
       const path = [44, 118, 256, 0, 0]
       const message = wallet.prepare(msg.tx, msg.sequence, msg.accountNumber, msg.chainId)
       const response = await app.sign(path, message)
@@ -427,15 +429,13 @@ class API {
       var s = sigBuf.slice(sIndex+2, sIndex + sigBuf[sIndex+1] + 2)
       if (s.length === 33) s = s.slice(1) // remove sign byte
       sigBuf = Buffer.concat([r, s])
+      const aminokey = Buffer.from("eb5ae98721" + this.wallet.publicKey, "hex")
       var signed = {
         type: "cosmos-sdk/StdTx",
         value: Object.assign({}, msg.tx, {
           signatures: [{
             signature: sigBuf.toString('base64'),
-            pub_key: {
-              type: 'tendermint/PubKeySecp256k1',
-              value: Buffer.from(this.wallet.publicKey, 'hex').toString('base64')
-            }
+            pub_key: aminokey.toString('base64')
           }]
         })
       }
@@ -462,16 +462,6 @@ class API {
       throw new Error("Post envelope: " + data.error)
     }
     return data.msg
-  }
-  
-  async createMarket(market) {
-    const data = await this.protocol.newMessage('createmarket', {
-      market: market
-    })
-    if (!data.status) {
-      throw new Error("Create market: " + data.error)
-    }
-    return await this.postTx(data.msg)
   }
   
   async createQuote(market, duration, backing, spot, premium) {
@@ -582,4 +572,4 @@ class API {
   
 }
 
-export default API
+module.exports = API

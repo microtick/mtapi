@@ -14,13 +14,12 @@ cat <<EOF > dist/package.json
   "version": "$VERSION",
   "description": "Microtick API",
   "main": "index.js",
+  "type": "module",
   "dependencies": {
     "bech32": "^1.1.3",
     "bip32": "^2.0.3",
     "bip39": "^3.0.2",
     "crypto-js": "^3.1.9-1",
-    "@ledgerhq/hw-transport-webusb": "^5.15.0",
-    "ledger-cosmos-js": "^2.1.7",
     "secp256k1": "^3.7.1",
     "websocket": "^1.0.29"
   },

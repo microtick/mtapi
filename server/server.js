@@ -5,7 +5,6 @@ const protocol = require('../lib/protocol.js')
 const axios = require('axios')
 const objecthash = require('object-hash')
 const crypto = require('crypto')
-const { marshalTx, unmarshalTx } = require('./amino.js')
 const format = require('./format.js')
 
 const config = JSON.parse(fs.readFileSync('./config.json'))
@@ -35,11 +34,14 @@ process.on('unhandledRejection', error => {
 
 // Subscriptions (websocket)
 const tendermint = config.tendermint
+const rest = config.rest
 
 // Transactions
 const NEWBLOCK = "tm.event='NewBlock'"
 const TXTIMEOUT = config.timeout
 const pending = {}
+
+const globals = {}
 
 // REST calls to Tendermint and Cosmos through ABCI
 
@@ -69,6 +71,24 @@ const queryCosmos = async (path, height) => {
     const data = Buffer.from(res.data.result.response.value, 'base64')
     return JSON.parse(data.toString())
   }
+}
+
+const postRestServer = async (path, body) => {
+  var query = "http://" + rest + path
+  const res = await axios.post(query, body)
+  return res.data
+}
+
+const marshalTx = async tx => {
+  const res = await postRestServer('/txs/encode', tx)
+  return res.tx
+}
+
+const unmarshalTx = async b64 => {
+  const res = await postRestServer('/txs/decode', {
+    tx: b64
+  })
+  return res.result
 }
 
 const queryHistBalance = async (acct, height) => {
@@ -137,8 +157,13 @@ const connect = async () => {
     
   const tmclient = new ws("ws://" + tendermint + "/websocket")
   
-  tmclient.on('open', () => {
+  tmclient.on('open', async () => {
     console.log("Tendermint connected")
+    
+    // query markets
+    const res = await queryTendermint("/genesis")
+    globals.markets = res.genesis.app_state.microtick.params.markets
+    console.log("Markets = " + globals.markets)
     
     const req = {
       "jsonrpc": "2.0",
@@ -338,8 +363,7 @@ const processBlock = async (chainid, height) => {
     for (var i=0; i<txs.length; i++) {
       //console.log("TX #" + i)
       const txb64 = txs[i]
-      var bytes = Buffer.from(txb64, 'base64')
-      var hash = crypto.createHash('sha256').update(bytes).digest('hex').toUpperCase()
+      var hash = crypto.createHash('sha256').update(Buffer.from(txb64, 'base64')).digest('hex').toUpperCase()
       const res64 = results.txs_results[i]
       if (pending[hash] !== undefined) {
         if (res64.code !== 0) {
@@ -352,7 +376,6 @@ const processBlock = async (chainid, height) => {
       if (res64.code === 0) {
         // Tx successful
         try {
-          const baseTx = unmarshalTx(bytes, false)
           const txstruct = {
             events: {}
           }
@@ -381,6 +404,7 @@ const processBlock = async (chainid, height) => {
             await processMicrotickTx(block, txstruct)
           } 
           if (txstruct.events.module === "bank" && txstruct.events.action === "send") {
+            const baseTx = await unmarshalTx(txb64)
             const depositPayload = {
               type: "deposit",
               from: txstruct.events.sender,
@@ -388,7 +412,7 @@ const processBlock = async (chainid, height) => {
               height: block.height,
               amount: parseFloat(txstruct.events.amount) / 1000000.0,
               time: block.time,
-              memo: baseTx.value.memo
+              memo: baseTx.memo
             }
             if (PRUNING_OFF) {
               depositPayload.balance = await queryHistBalance(txstruct.events.recipient, block.height)
@@ -400,7 +424,7 @@ const processBlock = async (chainid, height) => {
               height: block.height,
               amount: parseFloat(txstruct.events.amount) / 1000000.0,
               time: block.time,
-              memo: baseTx.value.memo
+              memo: baseTx.memo
             }
             if (PRUNING_OFF) {
               withdrawPayload.balance = await queryHistBalance(txstruct.events.sender, block.height)
@@ -413,6 +437,7 @@ const processBlock = async (chainid, height) => {
             }
           }
         } catch (err) {
+          console.log(err)
           console.log("UNKNOWN TX TYPE")
         }
       }
@@ -630,7 +655,8 @@ const handleMessage = async (env, name, payload) => {
         }
         ids[env.acct].push(env.id)
         return {
-          status: true
+          status: true,
+          markets: globals.markets
         }
       case 'subscribe':
         subscribeMarket(env.id, payload.key)
@@ -868,14 +894,6 @@ const handleMessage = async (env, name, payload) => {
         } else {
           throw new Error("Database turned off")
         }
-      case 'createmarket':
-        res = await queryCosmos("/microtick/generate/createmarket/" + 
-          env.acct + "/" + payload.market)
-        nextSequenceNumber(env.acct, res)
-        return {
-          status: true,
-          msg: res
-        }
       case 'createquote':
         res = await queryCosmos("/microtick/generate/createquote/" +
           env.acct + "/" + 
@@ -996,12 +1014,10 @@ const handleMessage = async (env, name, payload) => {
               try {
                 const txtype = payload.tx.value.msg[0].type
                 console.log("Posting [" + env.id + "] TX " + txtype + ": sequence=" + sequence) 
+                //console.log(JSON.stringify(payload.tx, null, 2))
                 pendingTx.submitted = true
-              
-                const bytes = marshalTx(payload.tx, false)
-                //console.log("bytes="  + JSON.stringify(bytes))
-                const hex = Buffer.from(bytes).toString('hex')
-                //console.log("hex=" + hex)
+                const b64 = await marshalTx(payload.tx)
+                const hex = Buffer.from(b64, 'base64').toString('hex')
                 res = await queryTendermint('/broadcast_tx_sync?tx=0x' + hex)
                 if (res.code !== 0) {
                   // error

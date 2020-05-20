@@ -132,12 +132,10 @@ function signWithPrivateKey(signMessage, privateKey) {
 }
 
 function createSignature(signature, publicKey) {
+  const aminokey = Buffer.concat([ Buffer.from("eb5ae98721", "hex"), publicKey ])
   return {
     signature: signature.toString(`base64`),
-    pub_key: {
-      type: `tendermint/PubKeySecp256k1`, // TODO: allow other keytypes
-      value: publicKey.toString(`base64`)
-    }
+    pub_key: aminokey.toString(`base64`)
   }
 }
 
