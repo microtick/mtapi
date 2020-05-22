@@ -163,7 +163,7 @@ const connect = async () => {
     // query markets
     const res = await queryTendermint("/genesis")
     globals.markets = res.genesis.app_state.microtick.params.markets
-    console.log("Markets = " + globals.markets)
+    console.log("Markets = " + globals.markets.map(m => m.name))
     
     const req = {
       "jsonrpc": "2.0",
