@@ -369,7 +369,7 @@ const processBlock = async (chainid, height) => {
         if (res64.code !== 0) {
           pending[hash].failure(new Error(res64.log))
         } else {
-          pending[hash].success({ tx_result: res64 })
+          pending[hash].success({ tx_result: res64, height: block.height, hash: hash })
         }
         delete pending[hash]
       }
