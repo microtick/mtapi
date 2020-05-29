@@ -56,7 +56,6 @@ const queryCosmos = async (path, height) => {
   if (height !== undefined) {
     query = query + "&height=" + height
   }
-  //console.log("query=" + query)
   const res = await axios.get(query)
   if (res.data.result.response.code !== 0) {
     //console.log("query=" + query)
@@ -414,9 +413,6 @@ const processBlock = async (chainid, height) => {
               time: block.time,
               memo: baseTx.memo
             }
-            if (PRUNING_OFF) {
-              depositPayload.balance = await queryHistBalance(txstruct.events.recipient, block.height)
-            }
             const withdrawPayload = {
               type: "withdraw",
               account: txstruct.events.sender,
@@ -426,8 +422,13 @@ const processBlock = async (chainid, height) => {
               time: block.time,
               memo: baseTx.memo
             }
-            if (PRUNING_OFF) {
-              withdrawPayload.balance = await queryHistBalance(txstruct.events.sender, block.height)
+            try {
+              if (PRUNING_OFF) {
+                withdrawPayload.balance = await queryHistBalance(txstruct.events.sender, block.height)
+                depositPayload.balance = await queryHistBalance(txstruct.events.recipient, block.height)
+              }
+            } catch (err) {
+              console.err("Unable to get historical balances for MsgSend: " + err)
             }
             sendAccountEvent(txstruct.events.recipient, "deposit", depositPayload)
             sendAccountEvent(txstruct.events.sender, "withdraw", withdrawPayload)
@@ -649,7 +650,7 @@ const handleMessage = async (env, name, payload) => {
     switch (name) {
       case 'connect':
         env.acct = payload.acct
-        console.log("Incoming connection [" + env.id + "] account=" + env.acct + "'")
+        console.log("Incoming connection [" + env.id + "] account=" + env.acct)
         if (ids[env.acct] === undefined) {
           ids[env.acct] = []
         }
