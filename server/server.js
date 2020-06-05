@@ -404,10 +404,12 @@ const processBlock = async (chainid, height) => {
           } 
           if (txstruct.events.module === "bank" && txstruct.events.action === "send") {
             const baseTx = await unmarshalTx(txb64)
+            const from = baseTx.msg[0].value.from_address
+            const to = baseTx.msg[0].value.to_address
             const depositPayload = {
               type: "deposit",
-              from: txstruct.events.sender,
-              account: txstruct.events.recipient,
+              from: from,
+              account: to,
               height: block.height,
               amount: parseFloat(txstruct.events.amount) / 1000000.0,
               time: block.time,
@@ -415,8 +417,8 @@ const processBlock = async (chainid, height) => {
             }
             const withdrawPayload = {
               type: "withdraw",
-              account: txstruct.events.sender,
-              to: txstruct.events.recipient,
+              account: from,
+              to: to,
               height: block.height,
               amount: parseFloat(txstruct.events.amount) / 1000000.0,
               time: block.time,
@@ -424,8 +426,8 @@ const processBlock = async (chainid, height) => {
             }
             try {
               if (PRUNING_OFF) {
-                withdrawPayload.balance = await queryHistBalance(txstruct.events.sender, block.height)
-                depositPayload.balance = await queryHistBalance(txstruct.events.recipient, block.height)
+                withdrawPayload.balance = await queryHistBalance(from, block.height)
+                depositPayload.balance = await queryHistBalance(to, block.height)
               }
             } catch (err) {
               console.error("Unable to get historical balances for MsgSend: " + err)
