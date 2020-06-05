@@ -428,7 +428,7 @@ const processBlock = async (chainid, height) => {
                 depositPayload.balance = await queryHistBalance(txstruct.events.recipient, block.height)
               }
             } catch (err) {
-              console.err("Unable to get historical balances for MsgSend: " + err)
+              console.error("Unable to get historical balances for MsgSend: " + err)
             }
             sendAccountEvent(txstruct.events.recipient, "deposit", depositPayload)
             sendAccountEvent(txstruct.events.sender, "withdraw", withdrawPayload)
