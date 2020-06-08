@@ -135,7 +135,7 @@ class API {
       this.getApp = cb
       const app = await this.getApp()
       const path = [44, 118, 256, 0, 0]
-      const response = await app.getAddressAndPubKey(path, "cosmos")
+      const response = await app.getAddressAndPubKey(path, "micro")
       if (response.return_code !== 0x9000) {
         throw new Error("Ledger initialization failed")
       }
