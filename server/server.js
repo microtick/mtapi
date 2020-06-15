@@ -537,50 +537,52 @@ if (config.host_ssl) {
     key: fs.readFileSync(config.key)
   })
 
-  const server = new ws.Server({ server: secure })
+  var server = new ws.Server({ server: secure })
   secure.listen(config.secureport)
-
-  server.on('connection', async client => {
-  
-    const env = {
-      id: connectionId++
-    }
-  
-    clients[env.id] = client
-  
-    client.on('message', async msg => {
-      const response = await apiProtocol.process(env, msg)
-      if (response !== undefined) {
-        client.send(response)
-      }
-    })
-
-    client.on('close', () => {
-      console.log("Disconnect " + env.id)
-      const id = env.id
-      delete clients[id]
-      if (ids[env.acct] !== undefined) {
-        ids[env.acct] = ids[env.acct].reduce((acc, arrid) => {
-          if (arrid !== id) {
-            acc.push(arrid)
-          }
-          return acc
-        }, [])
-        if (ids[env.acct].length === 0) {
-          delete ids[env.acct]
-        }
-      }
-      Object.keys(marketSubscriptions).map(key => {
-        marketSubscriptions[key] = marketSubscriptions[key].reduce((acc, subid) => {
-          if (subid != id) acc.push(subid)
-          return acc
-        }, [])
-      })
-      //const acct = env.acct
-    })
-  
-  })
+} else {
+  server = new ws.Server({ port: config.secureport })
 }
+
+server.on('connection', async client => {
+
+  const env = {
+    id: connectionId++
+  }
+
+  clients[env.id] = client
+
+  client.on('message', async msg => {
+    const response = await apiProtocol.process(env, msg)
+    if (response !== undefined) {
+      client.send(response)
+    }
+  })
+
+  client.on('close', () => {
+    console.log("Disconnect " + env.id)
+    const id = env.id
+    delete clients[id]
+    if (ids[env.acct] !== undefined) {
+      ids[env.acct] = ids[env.acct].reduce((acc, arrid) => {
+        if (arrid !== id) {
+          acc.push(arrid)
+        }
+        return acc
+      }, [])
+      if (ids[env.acct].length === 0) {
+        delete ids[env.acct]
+      }
+    }
+    Object.keys(marketSubscriptions).map(key => {
+      marketSubscriptions[key] = marketSubscriptions[key].reduce((acc, subid) => {
+        if (subid != id) acc.push(subid)
+        return acc
+      }, [])
+    })
+    //const acct = env.acct
+  })
+
+})
 
 const localServer = new ws.Server({
   host: "localhost",
