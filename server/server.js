@@ -161,7 +161,8 @@ const connect = async () => {
     
     // query markets
     const res = await queryTendermint("/genesis")
-    globals.markets = res.genesis.app_state.microtick.params.markets
+    globals.markets = res.genesis.app_state.microtick.markets
+    globals.durations = res.genesis.app_state.microtick.durations
     console.log("Markets = " + globals.markets.map(m => m.name))
     
     const req = {
@@ -730,7 +731,19 @@ const handleMessage = async (env, name, payload) => {
             consensus: parseFloat(res.consensus.amount),
             sumBacking: parseFloat(res.sumBacking.amount),
             sumWeight: parseFloat(res.sumWeight.amount),
-            orderBooks: res.orderBooks.map(ob => {
+            orderBooks: res.orderBooks.sort((a,b) => {
+              // orderbooks may come out of order, need to sort by time duration
+              const secs = globals.durations.reduce((acc, dur) => {
+                if (a === dur.name) {
+                  acc[0] = dur.seconds
+                }
+                if (b === dur.name) {
+                  acc[1] = dur.seconds
+                }
+                return acc
+              }, [0, 0])
+              return secs[0] - secs[1]
+            }).map(ob => {
               return {
                 name: ob.name,
                 sumBacking: parseFloat(ob.sumBacking.amount),
