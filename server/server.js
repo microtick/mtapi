@@ -72,6 +72,12 @@ const queryCosmos = async (path, height) => {
   }
 }
 
+const queryRestServer = async path => {
+  var query = "http://" + rest + path
+  const res = await axios.get(query)
+  return res.data
+}
+
 const postRestServer = async (path, body) => {
   var query = "http://" + rest + path
   const res = await axios.post(query, body)
@@ -685,11 +691,18 @@ const handleMessage = async (env, name, payload) => {
         break
       case 'getacctinfo':
         res = await queryCosmos('/microtick/account/' + payload.acct)
+        const bals = await queryRestServer('/bank/balances/' + payload.acct)
         returnObj = {
           status: true,
           info: {
             account: res.account,
             balance: parseFloat(res.balance.amount),
+            stake: parseFloat(bals.result.reduce((acc, b) => {
+              if (b.denom === "utick") {
+                acc = parseFloat(b.amount) / 1000000.0
+              }
+              return acc
+            }, 0)),
             numquotes: res.numQuotes,
             numtrades: res.numTrades,
             activeQuotes: res.activeQuotes,
