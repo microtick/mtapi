@@ -22,5 +22,5 @@
     "secp256k1": "^3.6.2",
     "websocket": "^1.0.31"
   },
-  "description": ""
+  "description": "Microtick API"
 }
