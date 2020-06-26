@@ -9,7 +9,8 @@ module.exports = {
         account: rec.account,
         from: rec.from,
         amount: rec.amount,
-        memo: rec.memo
+        memo: rec.memo,
+        hash: rec.hash
       }
       return obj
     },
@@ -21,7 +22,8 @@ module.exports = {
         account: rec.account,
         to: rec.to,
         amount: rec.amount,
-        memo: rec.memo
+        memo: rec.memo,
+        hash: rec.hash
       }
       return obj
     },

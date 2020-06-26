@@ -420,7 +420,8 @@ const processBlock = async (chainid, height) => {
               height: block.height,
               amount: parseFloat(txstruct.events.amount) / 1000000.0,
               time: block.time,
-              memo: baseTx.memo
+              memo: baseTx.memo,
+              hash: hash
             }
             const withdrawPayload = {
               type: "withdraw",
@@ -429,7 +430,8 @@ const processBlock = async (chainid, height) => {
               height: block.height,
               amount: parseFloat(txstruct.events.amount) / 1000000.0,
               time: block.time,
-              memo: baseTx.memo
+              memo: baseTx.memo,
+              hash: hash
             }
             try {
               if (PRUNING_OFF) {
@@ -691,18 +693,11 @@ const handleMessage = async (env, name, payload) => {
         break
       case 'getacctinfo':
         res = await queryCosmos('/microtick/account/' + payload.acct)
-        const bals = await queryRestServer('/bank/balances/' + payload.acct)
         returnObj = {
           status: true,
           info: {
             account: res.account,
             balance: parseFloat(res.balance.amount),
-            stake: parseFloat(bals.result.reduce((acc, b) => {
-              if (b.denom === "utick") {
-                acc = parseFloat(b.amount) / 1000000.0
-              }
-              return acc
-            }, 0)),
             numquotes: res.numQuotes,
             numtrades: res.numTrades,
             activeQuotes: res.activeQuotes,
