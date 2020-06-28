@@ -264,6 +264,16 @@ class API {
     return response.info
   }
   
+  async getStake(acct) {
+    const response = await this.protocol.newMessage('getstake', {
+      acct: acct
+    })
+    if (!response.status) {
+      throw new Error("Get stake: " + response.error)
+    }
+    return response.info
+  }
+  
   async getAccountPerformance(acct, start, end) {
     const response = await this.protocol.newMessage('getacctperf', {
       acct: acct,

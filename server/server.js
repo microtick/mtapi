@@ -708,6 +708,18 @@ const handleMessage = async (env, name, payload) => {
           }
         }
         break
+      case 'getstake':
+        res = await queryRestServer('/bank/balances/' + payload.acct)
+        returnObj = {
+          status: true,
+          info: res.result.reduce((acc, coin) => {
+            if (coin.denom === "utick") {
+              acc = parseFloat(coin.amount)
+            }
+            return acc
+          }, 0)
+        }
+        break
       case 'getacctperf':
         if (USE_DATABASE) {
           var start = payload.start
@@ -734,6 +746,7 @@ const handleMessage = async (env, name, payload) => {
         break
       case 'getmarketinfo':
         res = await queryCosmos('/microtick/market/' + payload.market)
+        if (res.orderBooks === null) res.orderBooks = []
         returnObj = {
           status: true,
           info: {
@@ -741,19 +754,7 @@ const handleMessage = async (env, name, payload) => {
             consensus: parseFloat(res.consensus.amount),
             sumBacking: parseFloat(res.sumBacking.amount),
             sumWeight: parseFloat(res.sumWeight.amount),
-            orderBooks: res.orderBooks.sort((a,b) => {
-              // orderbooks may come out of order, need to sort by time duration
-              const secs = globals.durations.reduce((acc, dur) => {
-                if (a === dur.name) {
-                  acc[0] = dur.seconds
-                }
-                if (b === dur.name) {
-                  acc[1] = dur.seconds
-                }
-                return acc
-              }, [0, 0])
-              return secs[0] - secs[1]
-            }).map(ob => {
+            orderBooks: res.orderBooks.map(ob => {
               return {
                 name: ob.name,
                 sumBacking: parseFloat(ob.sumBacking.amount),
