@@ -170,6 +170,7 @@ const connect = async () => {
     globals.markets = res.genesis.app_state.microtick.markets
     globals.durations = res.genesis.app_state.microtick.durations
     console.log("Markets = " + globals.markets.map(m => m.name))
+    console.log("Durations = " + globals.durations.map(d => d.name))
     
     const req = {
       "jsonrpc": "2.0",
@@ -670,7 +671,8 @@ const handleMessage = async (env, name, payload) => {
         ids[env.acct].push(env.id)
         return {
           status: true,
-          markets: globals.markets
+          markets: globals.markets,
+          durations: globals.durations
         }
       case 'subscribe':
         subscribeMarket(env.id, payload.key)

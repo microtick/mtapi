@@ -170,6 +170,7 @@ class API {
           throw new Error("Connect: " + response.error)
         }
         api.markets = response.markets
+        api.durations = response.durations
         Object.keys(this.subscriptions).map(async key => {
           if (this.subscriptions[key] > 0) {
             this.subscriptions[key]--
@@ -214,6 +215,10 @@ class API {
   
   getMarkets() {
     return this.markets
+  }
+  
+  getDurations() {
+    return this.durations
   }
   
   async subscribe(key) {
