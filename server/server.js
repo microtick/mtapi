@@ -1047,7 +1047,8 @@ const handleMessage = async (env, name, payload) => {
                 pendingTx.submitted = true
                 const b64 = await marshalTx(payload.tx)
                 const hex = Buffer.from(b64, 'base64').toString('hex')
-                res = await queryTendermint('/broadcast_tx_sync?tx=0x' + hex)
+                const query = '/broadcast_tx_sync?tx=0x' + hex
+                res = await queryTendermint(query)
                 if (res.code !== 0) {
                   // error
                   outerReject(new Error(res.log))

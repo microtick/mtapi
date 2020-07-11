@@ -134,7 +134,7 @@ class API {
     } else if (keys === "ledger") {
       this.getApp = cb
       const app = await this.getApp()
-      const path = [44, 118, 256, 0, 0]
+      const path = [44, 118, 0, 0, 0]
       const response = await app.getAddressAndPubKey(path, "micro")
       if (response.return_code !== 0x9000) {
         throw new Error("Ledger initialization failed")
@@ -420,7 +420,7 @@ class API {
   async postTx(msg) {
     if (this.wallet.type === "ledger") {
       const app = await this.getApp()
-      const path = [44, 118, 256, 0, 0]
+      const path = [44, 118, 0, 0, 0]
       const message = wallet.prepare(msg.tx, msg.sequence, msg.accountNumber, msg.chainId)
       const response = await app.sign(path, message)
       if (response.return_code !== 0x9000) {

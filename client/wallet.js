@@ -6,7 +6,7 @@ const sha256 = require("crypto-js/sha256")
 const ripemd160 = require("crypto-js/ripemd160")
 const CryptoJS = require("crypto-js")
 
-const hdPathAtom = `m/44'/118'/256'/0/0`
+const hdPathAtom = `m/44'/118'/0'/0/0`
 
 const standardRandomBytesFunc = x => CryptoJS.lib.WordArray.random(x).toString()
 
