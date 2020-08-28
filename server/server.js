@@ -58,8 +58,8 @@ const queryCosmos = async (path, height) => {
   }
   const res = await axios.get(query)
   if (res.data.result.response.code !== 0) {
-    //console.log("query=" + query)
-    //console.log(JSON.stringify(res.data, null, 2))
+    console.log("query=" + query)
+    console.log(JSON.stringify(res.data, null, 2))
     const obj = res.data.result.response.log
     //console.log(JSON.stringify(obj))
     throw new Error(obj)
@@ -99,7 +99,7 @@ const unmarshalTx = async b64 => {
 const queryHistBalance = async (acct, height) => {
   if (USE_DATABASE) {
     const balance = await queryCosmos("/microtick/account/" + acct, height)
-    return parseFloat(balance.balance.amount)
+    return parseFloat(balance.dai)
   } else {
     return 0
   }
@@ -512,20 +512,20 @@ const processMicrotickTx = async (block, tx) => {
           const trade = tx.result.trade
           const start = Math.floor(Date.parse(trade.start) / 1000)
           const end = Math.floor(Date.parse(trade.expiration) / 1000)
-          await db.insertAction(id, "long", trade.long, start, end, parseFloat(trade.cost.amount), 0)
-          for (var i=0; i<trade.counterparties.length; i++) {
-            const cp = trade.counterparties[i]
-            await db.insertAction(id, "short", cp.short, start, end, 0, parseFloat(cp.premium.amount))
+          for (var i=0; i<trade.legs.length; i++) {
+            const leg = trade.legs[i]
+            await db.insertAction(id, "long", leg.long, start, end, 0, parseFloat(leg.premium.amount))
+            await db.insertAction(id, "short", leg.short, start, end, 0, parseFloat(leg.premium.amount))
           }
         }
         if (type === "event.settle") {
           const trade = tx.result
-          const amt = parseFloat(trade.settle.amount)
-          if (amt > 0) {
-            await db.updateAction(id, trade.long, 0, parseFloat(trade.settle.amount))
-            for (i=0; i<trade.counterparties.length; i++) {
-              const cp = trade.counterparties[i]
-              await db.updateAction(id, cp.short, parseFloat(cp.settle.amount), 0)
+          for (var i=0; i<trade.settlements.length; i++) {
+            const s = trade.settlements[i]
+            const amt = parseFloat(s.settle.amount)
+            if (amt > 0) {
+              await db.updateAction(id, s.long, 0, amt) 
+              await db.updateAction(id, s.short, amt, 0)
             }
           }
         }
@@ -699,7 +699,8 @@ const handleMessage = async (env, name, payload) => {
           status: true,
           info: {
             account: res.account,
-            balance: parseFloat(res.balance.amount),
+            balance: parseFloat(res.dai),
+            stake: parseFloat(res.tick),
             numquotes: res.numQuotes,
             numtrades: res.numTrades,
             activeQuotes: res.activeQuotes,
@@ -708,18 +709,6 @@ const handleMessage = async (env, name, payload) => {
             tradeBacking: parseFloat(res.tradeBacking.amount),
             settleBacking: parseFloat(res.settleBacking.amount)
           }
-        }
-        break
-      case 'getstake':
-        res = await queryRestServer('/bank/balances/' + payload.acct)
-        returnObj = {
-          status: true,
-          info: res.result.reduce((acc, coin) => {
-            if (coin.denom === "utick") {
-              acc = parseFloat(coin.amount)
-            }
-            return acc
-          }, 0)
         }
         break
       case 'getacctperf':
@@ -761,8 +750,12 @@ const handleMessage = async (env, name, payload) => {
                 name: ob.name,
                 sumBacking: parseFloat(ob.sumBacking.amount),
                 sumWeight: parseFloat(ob.sumWeight.amount),
-                insideCall: parseFloat(ob.insideCall.amount),
-                insidePut: parseFloat(ob.insidePut.amount)
+                insideAsk: parseFloat(ob.insideAsk.amount),
+                insideBid: parseFloat(ob.insideBid.amount),
+                insideCallAsk: parseFloat(ob.insideCallAsk.amount),
+                insideCallBid: parseFloat(ob.insideCallBid.amount),
+                insidePutAsk: parseFloat(ob.insidePutAsk.amount),
+                insidePutBid: parseFloat(ob.insidePutBid.amount)
               }
             })
           }
@@ -771,13 +764,22 @@ const handleMessage = async (env, name, payload) => {
       case 'getorderbookinfo':
         res = await queryCosmos('/microtick/orderbook/' + payload.market + "/" + 
           payload.duration)
+        const quoteListParser = q => {
+          return {
+            id: q.id,
+            premium: parseFloat(q.premium),
+            quantity: parseFloat(q.quantity)
+          }
+        }
         returnObj = {
           status: true,
           info: {
             sumBacking: parseFloat(res.sumBacking.amount),
             sumWeight: parseFloat(res.sumWeight.amount),
-            calls: res.calls,
-            puts: res.puts
+            callAsks: res.callAsks.map(quoteListParser),
+            putAsks: res.putAsks.map(quoteListParser),
+            callBids: res.callBids.map(quoteListParser),
+            putBids: res.putBids.map(quoteListParser)
           }
         }
         break
@@ -804,10 +806,13 @@ const handleMessage = async (env, name, payload) => {
             provider: res.provider,
             backing: parseFloat(res.backing.amount),
             spot: parseFloat(res.spot.amount),
-            premium: parseFloat(res.premium.amount),
+            ask: parseFloat(res.ask.amount),
+            bid: parseFloat(res.bid.amount),
             quantity: parseFloat(res.quantity.amount),
-            premiumAsCall: parseFloat(res.premiumAsCall.amount),
-            premiumAsPut: parseFloat(res.premiumAsPut.amount),
+            callAsk: parseFloat(res.callAsk.amount),
+            callBid: parseFloat(res.callBid.amount),
+            putAsk: parseFloat(res.putAsk.amount),
+            putBid: parseFloat(res.putBid.amount),
             modified: Date.parse(res.modified),
             canModify: Date.parse(res.canModify)
           }
@@ -821,30 +826,30 @@ const handleMessage = async (env, name, payload) => {
             id: res.id,
             market: res.market,
             duration: res.duration,
-            option: res.type,
-            long: res.long,
+            order: res.order,
+            taker: res.taker,
             start: Date.parse(res.start),
             expiration: Date.parse(res.expiration),
-            backing: parseFloat(res.backing.amount),
-            premium: parseFloat(res.premium.amount),
-            quantity: parseFloat(res.quantity.amount),
             strike: parseFloat(res.strike.amount),
             currentSpot: parseFloat(res.currentSpot.amount),
             currentValue: parseFloat(res.currentValue.amount),
             commission: parseFloat(res.commission.amount),
             settleIncentive: parseFloat(res.settleIncentive.amount),
-            counterparties: res.counterparties.map(cp => {
+            legs: res.legs.map(leg => {
               return {
-                backing: parseFloat(cp.backing.amount),
-                premium: parseFloat(cp.premium.amount),
-                quantity: parseFloat(cp.quantity.amount),
-                final: cp.final,
-                short: cp.short,
+                leg_id: leg.leg_id,
+                type: leg.type ? "call" : "put",
+                backing: parseFloat(leg.backing.amount),
+                premium: parseFloat(leg.premium.amount),
+                quantity: parseFloat(leg.quantity.amount),
+                final: leg.final,
+                long: leg.long,
+                short: leg.short,
                 quoted: {
-                  id: cp.quoted.id,
-                  premium: parseFloat(cp.quoted.premium.amount),
-                  quantity: parseFloat(cp.quoted.quantity.amount),
-                  spot: parseFloat(cp.quoted.spot.amount)
+                  id: leg.quoted.id,
+                  premium: parseFloat(leg.quoted.premium.amount),
+                  quantity: parseFloat(leg.quoted.quantity.amount),
+                  spot: parseFloat(leg.quoted.spot.amount)
                 }
               }
             })
@@ -930,7 +935,8 @@ const handleMessage = async (env, name, payload) => {
           payload.duration + "/" +
           payload.backing + "/" + 
           payload.spot + "/" +
-          payload.premium)
+          payload.ask + "/" +
+          payload.bid)
         nextSequenceNumber(env.acct, res)
         return {
           status: true,
@@ -970,7 +976,8 @@ const handleMessage = async (env, name, payload) => {
           env.acct + "/" +
           payload.id + "/" + 
           payload.newspot + "/" +
-          payload.newpremium)
+          payload.newask + "/" + 
+          payload.newbid)
         nextSequenceNumber(env.acct, res)
         return {
           status: true,
@@ -981,21 +988,8 @@ const handleMessage = async (env, name, payload) => {
           env.acct + "/" +
           payload.market + "/" + 
           payload.duration + "/" +
-          payload.tradetype + "/" + 
+          payload.ordertype + "/" + 
           payload.quantity)
-        nextSequenceNumber(env.acct, res)
-        return {
-          status: true,
-          msg: res
-        }
-      case 'limittrade':
-        res = await queryCosmos("/microtick/generate/limittrade/" +
-          env.acct +"/" +
-          payload.market + "/" +
-          payload.duration + "/" +
-          payload.tradetype + "/" + 
-          payload.limit + "/" +
-          payload.maxcost)
         nextSequenceNumber(env.acct, res)
         return {
           status: true,
@@ -1005,7 +999,7 @@ const handleMessage = async (env, name, payload) => {
         res = await queryCosmos("/microtick/generate/picktrade/" +
           env.acct + "/" + 
           payload.id + "/" + 
-          payload.tradetype)
+          payload.ordertype)
         nextSequenceNumber(env.acct, res)
         return {
           status: true,
@@ -1129,7 +1123,7 @@ const handleMessage = async (env, name, payload) => {
     
   } catch (err) {
     console.log("API error: " + name + ": " + err.message)
-    //console.log(err)
+    console.log(err)
     //if (err !== undefined) console.log(err)
     return {
       status: false,

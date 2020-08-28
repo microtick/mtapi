@@ -269,16 +269,6 @@ class API {
     return response.info
   }
   
-  async getStake(acct) {
-    const response = await this.protocol.newMessage('getstake', {
-      acct: acct
-    })
-    if (!response.status) {
-      throw new Error("Get stake: " + response.error)
-    }
-    return response.info
-  }
-  
   async getAccountPerformance(acct, start, end) {
     const response = await this.protocol.newMessage('getacctperf', {
       acct: acct,
@@ -479,13 +469,17 @@ class API {
     return data.msg
   }
   
-  async createQuote(market, duration, backing, spot, premium) {
+  async createQuote(market, duration, backing, spot, ask, bid) {
+    if (bid === undefined) {
+      bid = "0premium"
+    }
     const data = await this.protocol.newMessage('createquote', {
       market: market,
       duration: duration,
       backing: backing,
       spot: spot,
-      premium: premium
+      ask: ask,
+      bid: bid
     })
     if (!data.status) {
       throw new Error("Create quote: " + data.error)
@@ -525,11 +519,12 @@ class API {
     return await this.postTx(data.msg)
   }
   
-  async updateQuote(id, newspot, newpremium) {
+  async updateQuote(id, newspot, newask, newbid) {
     const data = await this.protocol.newMessage('updatequote', {
       id: id,
       newspot: newspot,
-      newpremium: newpremium
+      newask: newask,
+      newbid: newbid
     })
     if (!data.status) {
       throw new Error("Update quote: " + data.error)
@@ -537,40 +532,26 @@ class API {
     return await this.postTx(data.msg)
   }
   
-  async marketTrade(market, duration, tradetype, quantity) {
+  async marketTrade(market, duration, ordertype, quantity) {
     const data = await this.protocol.newMessage('markettrade', {
       market: market,
       duration: duration,
-      tradetype: tradetype,
+      ordertype: ordertype,
       quantity: quantity
     })
     if (!data.status) {
-      throw new Error("Buy " + tradetype + ": " + data.error)
+      throw new Error(ordertype + ": " + data.error)
     }
     return await this.postTx(data.msg)
   }
   
-  async limitTrade(market, duration, tradetype, limit, maxcost) {
-    const data = await this.protocol.newMessage('limittrade', {
-      market: market,
-      duration: duration,
-      tradetype: tradetype,
-      limit: limit,
-      maxcost: maxcost
-    })
-    if (!data.status) {
-      throw new Error("Buy " + tradetype + ": " + data.error)
-    }
-    return await this.postTx(data.msg)
-  }
-  
-  async pickTrade(id, tradetype) {
+  async pickTrade(id, ordertype) {
     const data = await this.protocol.newMessage('picktrade', {
       id: id,
-      tradetype: tradetype
+      ordertype: ordertype
     })
     if (!data.status) {
-      throw new Error("Buy " + tradetype + ": " + data.error)
+      throw new Error(ordertype + ": " + data.error)
     }
     return await this.postTx(data.msg)
   }

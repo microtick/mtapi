@@ -27,110 +27,63 @@ module.exports = {
       }
       return obj
     },
-    "trade.long": rec => {
-      //console.log("rec=" + JSON.stringify(rec, null, 2))
+    "trade.start": rec => {
+      console.log("rec=" + JSON.stringify(rec, null, 2))
       const obj = {
-        event: "trade.long",
+        event: "trade.start",
         height: rec.height,
         time: Date.parse(rec.time),
         id: rec.trade.id,
         market: rec.market,
         duration: rec.duration,
-        option: rec.trade.type,
-        long: rec.trade.long,
+        order: rec.trade.order,
+        taker: rec.trade.taker,
         start: Date.parse(rec.trade.start),
         expiration: Date.parse(rec.trade.expiration),
         strike: parseFloat(rec.trade.strike.amount),
-        backing: parseFloat(rec.trade.backing.amount),
-        cost: parseFloat(rec.trade.cost.amount),
-        quantity: parseFloat(rec.trade.quantity.amount),
         commission: parseFloat(rec.trade.commission.amount),
         settleincentive: parseFloat(rec.trade.settleIncentive.amount),
-        counterparties: rec.trade.counterparties.map(cp => {
+        legs: rec.trade.legs.map(leg => {
           return {
-            short: cp.short,
-            final: cp.final,
-            backing: parseFloat(cp.backing.amount),
-            premium: parseFloat(cp.premium.amount),
-            quantity: parseFloat(cp.quantity.amount),
+            leg_id: leg.leg_id,
+            type: leg.type ? "call" : "put",
+            long: leg.long,
+            short: leg.short,
+            final: leg.final,
+            backing: parseFloat(leg.backing.amount),
+            premium: parseFloat(leg.premium.amount),
+            quantity: parseFloat(leg.quantity.amount),
             quoted: {
-              id: cp.quoted.id,
-              premium: parseFloat(cp.quoted.premium.amount),
-              quantity: parseFloat(cp.quoted.quantity.amount),
-              spot: parseFloat(cp.quoted.spot.amount)
+              id: leg.quoted.id,
+              premium: parseFloat(leg.quoted.premium.amount),
+              quantity: parseFloat(leg.quoted.quantity.amount),
+              spot: parseFloat(leg.quoted.spot.amount)
             }
           }
         })
       }
       return obj
     },
-    "trade.short": rec => {
+    "trade.end": rec => {
+      console.log(JSON.stringify(rec, null, 2))
       const obj = {
-        event: "trade.short",
+        event: "trade.end",
         height: rec.height,
         time: Date.parse(rec.time),
-        id: rec.trade.id,
-        market: rec.market,
-        duration: rec.duration,
-        option: rec.trade.type,
-        long: rec.trade.long,
-        start: Date.parse(rec.trade.start),
-        expiration: Date.parse(rec.trade.expiration),
-        strike: parseFloat(rec.trade.strike.amount),
-        backing: parseFloat(rec.trade.backing.amount),
-        cost: parseFloat(rec.trade.cost.amount),
-        quantity: parseFloat(rec.trade.quantity.amount),
-        counterparties: rec.trade.counterparties.map(cp => {
+        id: rec.id,
+        long: rec.long,
+        final: parseFloat(rec.final.amount),
+        settlements: rec.settlements.map(s => {
           return {
-            short: cp.short,
-            final: cp.final,
-            backing: parseFloat(cp.backing.amount),
-            premium: parseFloat(cp.premium.amount),
-            quantity: parseFloat(cp.quantity.amount),
-            quoted: {
-              id: cp.quoted.id,
-              premium: parseFloat(cp.quoted.premium.amount),
-              quantity: parseFloat(cp.quoted.quantity.amount),
-              spot: parseFloat(cp.quoted.spot.amount)
+            leg_id: s.leg_id,
+            settle: {
+              account: s.settle_account,
+              amount: parseFloat(s.settle.amount)
+            },
+            refund: {
+              account: s.refund_account,
+              amount: parseFloat(s.refund.amount)
             }
-          }
-        })
-      }
-      return obj
-    },
-    "settle.long": rec => {
-      const obj = {
-        event: "settle.long",
-        height: rec.height,
-        time: Date.parse(rec.time),
-        id: rec.id,
-        long: rec.long,
-        final: parseFloat(rec.final.amount),
-        settle: parseFloat(rec.settle.amount),
-        counterparties: rec.counterparties.map(cp => {
-          return {
-            short: cp.short,
-            settle: parseFloat(cp.settle.amount),
-            refund: parseFloat(cp.refund.amount)
-          }
-        })
-      }
-      return obj
-    },
-    "settle.short": rec => {
-      const obj = {
-        event: "settle.short",
-        height: rec.height,
-        time: Date.parse(rec.time),
-        id: rec.id,
-        long: rec.long,
-        final: parseFloat(rec.final.amount),
-        settle: parseFloat(rec.settle.amount),
-        counterparties: rec.counterparties.map(cp => {
-          return {
-            short: cp.short,
-            settle: parseFloat(cp.settle.amount),
-            refund: parseFloat(cp.refund.amount)
           }
         })
       }
@@ -282,11 +235,11 @@ module.exports = {
         balance: rec.balance[acct]
       }
     },
-    "trade.long": (acct, rec) => {
+    "trade.start": (acct, rec) => {
       const cost = parseFloat(rec.trade.cost.amount)
       const commission = parseFloat(rec.trade.commission.amount) + parseFloat(rec.trade.settleIncentive.amount)
       const obj = {
-        event: "trade.long",
+        event: "trade.start",
         height: rec.height,
         time: Date.parse(rec.time),
         id: rec.trade.id,
@@ -302,26 +255,7 @@ module.exports = {
       }
       return obj 
     },
-    "trade.short": (acct, rec) => {
-      const cost = parseFloat(rec.trade.cost.amount)
-      const obj = {
-        event: "trade.short",
-        height: rec.height,
-        time: Date.parse(rec.time),
-        id: rec.trade.id,
-        market: rec.trade.market,
-        duration: rec.trade.duration,
-        amount: cost,
-        premium: cost,
-        option: rec.trade.type,
-        commission: 0,
-        debit: 0,
-        credit: cost,
-        balance: rec.balance[acct]
-      }
-      return obj 
-    },
-    "settle.long": (acct, rec) => {
+    "trade.end": (acct, rec) => {
       const settle = parseFloat(rec.settle.amount)
       var commission = 0
       var credit = settle
@@ -329,37 +263,12 @@ module.exports = {
         credit += parseFloat(rec.incentive.amount) - parseFloat(rec.commission.amount)
       }
       const obj = {
-        event: "settle.long",
+        event: "trade.end",
         height: rec.height,
         time: Date.parse(rec.time),
         id: rec.id,
         amount: settle,
         settle: settle,
-        debit: 0,
-        credit: credit,
-        commission: commission,
-        balance: rec.balance[acct]
-      }
-      return obj
-    },
-    "settle.short": (acct, rec) => {
-      const refund = rec.counterparties.reduce((acc, cp) => {
-          if (cp.short === acct) {
-            acc += parseFloat(cp.refund.amount)
-          }
-          return acc
-        }, 0)
-      var commission = 0
-      var credit = refund
-      if (rec.settler === acct) {
-        credit += parseFloat(rec.incentive.amount) - parseFloat(rec.commission.amount)
-      }
-      const obj = {
-        event: "settle.short",
-        height: rec.height,
-        time: Date.parse(rec.time),
-        id: rec.id,
-        amount: refund,
         debit: 0,
         credit: credit,
         commission: commission,
