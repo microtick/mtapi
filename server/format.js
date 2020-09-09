@@ -38,6 +38,7 @@ module.exports = {
         duration: rec.duration,
         order: rec.trade.order,
         taker: rec.trade.taker,
+        quantity: parseFloat(rec.trade.quantity.amount),
         start: Date.parse(rec.trade.start),
         expiration: Date.parse(rec.trade.expiration),
         strike: parseFloat(rec.trade.strike.amount),
@@ -52,11 +53,11 @@ module.exports = {
             final: leg.final,
             backing: parseFloat(leg.backing.amount),
             premium: parseFloat(leg.premium.amount),
+            cost: parseFloat(leg.cost.amount),
             quantity: parseFloat(leg.quantity.amount),
             quoted: {
               id: leg.quoted.id,
               premium: parseFloat(leg.quoted.premium.amount),
-              quantity: parseFloat(leg.quoted.quantity.amount),
               spot: parseFloat(leg.quoted.spot.amount)
             }
           }
@@ -245,8 +246,10 @@ module.exports = {
         id: rec.trade.id,
         market: rec.trade.market,
         duration: rec.trade.duration,
+        quantity: parseFloat(rec.trade.quantity),
         amount: cost,
-        premium: cost,
+        premium: rec.trade.premium.amount,
+        cost: cost,
         option: rec.trade.type,
         commission: commission,
         debit: cost + commission,

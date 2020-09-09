@@ -848,7 +848,6 @@ const handleMessage = async (env, name, payload) => {
                 quoted: {
                   id: leg.quoted.id,
                   premium: parseFloat(leg.quoted.premium.amount),
-                  quantity: parseFloat(leg.quoted.quantity.amount),
                   spot: parseFloat(leg.quoted.spot.amount)
                 }
               }
