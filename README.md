@@ -18,8 +18,9 @@ Microtick trading bots and market makers.
 To run the API server, cd into the 'server' directory and execute the following commands (default websocket port is 1320)
 
 ```
-$ npm install
-$ node api-server
+$ cd server
+$ yarn install
+$ node server.js
 ```
 
 ## Client API Documentation
