@@ -37,3 +37,5 @@ EOF
 cp client/api.js dist/index.js
 cp client/wallet.js dist
 cp lib/protocol.js dist
+cp lib/tx.js dist
+

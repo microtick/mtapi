@@ -1,3 +1,5 @@
+const API = require('../client/api.js')
+
 process.on('unhandledRejection', error => {
   if (error !== undefined) {
     console.log('unhandled promise rejection: ', error.message);
@@ -5,39 +7,50 @@ process.on('unhandledRejection', error => {
   } else {
     console.log("promise rejection")
   }
+  process.exit()
 });
 
 async function main() {
-  const API = require('mtapi')
-  const keys = JSON.parse('{"pub":"0332cbaab1a0397565f3ef26dcef6d89974a6f8fa04332e5a05acc4559916c1b17","priv":"8e047fd4a929bace52127ed67bd9ae3cc649a4fce03638775f7d3480658526c6","acct":"cosmos127ve5ay2xdn7q2fcu4xu8870wlnww845pv6ten"}')
-  const api = await API("ws://localhost:1320", keys)
-  const wallet = await api.getWallet()
-  await api.subscribe("mtm.MarketTick='ETHUSD'", () => {
-    console.log("Market tick")
-  })
-  /*
-  var res = await api.blockInfo()
-  console.log("Block info=" + JSON.stringify(res))
-  res = await api.getBlock(10)
-  console.log("Get block=" + res.block.header.last_commit_hash)
-  res = await api.getAccountInfo('cosmos1585drq7u4cdgvdslclt0g7lceghwj9vljdm8tr')
-  //res = await api.getAccountInfo(wallet.acct)
-  console.log("Account info=" + JSON.stringify(res))
-  res = await api.getMarketInfo("ETHUSD")
-  console.log("Market info=" + JSON.stringify(res))
-  res = await api.getOrderbookInfo("ETHUSD", "5minute")
-  console.log("Orderbook info=" + JSON.stringify(res))
-  res = await api.getMarketSpot("ETHUSD")
-  console.log("Market spot=" + JSON.stringify(res))
-  //res = await api.getQuote(2328)
-  //console.log("Quote=" + JSON.stringify(res))
-  //res = await api.getTrade(1)
-  //console.log("Trade=" + JSON.stringify(res))
-  res = await api.history("mtm.MarketTick='ETHUSD'", 100000, 100010, null)
-  console.log("History length=" + res.history.length)
-  */
-  var res = await api.createQuote("ETHUSD", "5minute", "1fox", "210spot", "4premium")
+  //const mnemonic = "collect congress dance legend genre fine traffic ethics post nature recycle short test neutral skin rain remain fetch evil champion drink when trigger still"
+  const mnemonic = "congress collect dance legend genre fine traffic ethics post nature recycle short test neutral skin rain remain fetch evil champion drink when trigger still"
+  const api = new API("ws://localhost:1320")
+  await api.init(mnemonic.split(" "), console.log)
+  var res = await api.getAccountInfo(api.wallet.address)
   console.log(JSON.stringify(res))
+  res = await api.getMarketInfo("ETHUSD")
+  console.log(JSON.stringify(res))
+  res = await api.getMarketSpot("ETHUSD")
+  console.log(JSON.stringify(res))
+  res = await api.getOrderbookInfo("ETHUSD", "5minute")
+  console.log(JSON.stringify(res))
+  res = await api.getSyntheticInfo("ETHUSD", "5minute")
+  console.log(JSON.stringify(res))
+  //res = await api.getLiveQuote(1)
+  //console.log(JSON.stringify(res))
+  //res = await api.getLiveTrade(1)
+  //console.log(JSON.stringify(res))
+  res = await api.getAccountAuth(api.wallet.address)
+  console.log(JSON.stringify(res))
+  
+  console.log()
+  //res = await api.createQuote("ETHUSD", "5minute", "10dai", "302spot", "1premium")
+  //console.log("res=" + JSON.stringify(res, null, 2))
+  //res = await api.cancelQuote(1)
+  //console.log(JSON.stringify(res))
+  //res = await api.depositQuote(2, "10dai")
+  //console.log(JSON.stringify(res))
+  //res = await api.withdrawQuote(2, "0.75dai")
+  //console.log(JSON.stringify(res))
+  //res = await api.updateQuote(2, "301spot", "0.8premium", "0.1premium")
+  //console.log(JSON.stringify(res))
+  //res = await api.marketTrade("ETHUSD", "5minute", "buy-call", "0.1quantity")
+  //console.log(JSON.stringify(res))
+  //res = await api.pickTrade(4, "buy-call")
+  //console.log(JSON.stringify(res))
+  res = await api.settleTrade(7)
+  console.log(JSON.stringify(res))
+  
+  process.exit()
 }
 
 main()

@@ -1,11 +1,10 @@
 module.exports = {
   fullTx: {
     "deposit": rec => {
-      //console.log("rec=" + JSON.stringify(rec, null, 2))
       const obj = {
         event: "deposit",
         height: rec.height,
-        time: rec.time,
+        time: new Date(rec.time * 1000),
         account: rec.account,
         from: rec.from,
         amount: rec.amount,
@@ -18,7 +17,7 @@ module.exports = {
       const obj = {
         event: "withdraw",
         height: rec.height,
-        time: rec.time,
+        time: new Date(rec.time * 1000),
         account: rec.account,
         to: rec.to,
         amount: rec.amount,
@@ -28,37 +27,36 @@ module.exports = {
       return obj
     },
     "trade.start": rec => {
-      console.log("rec=" + JSON.stringify(rec, null, 2))
       const obj = {
         event: "trade.start",
         height: rec.height,
-        time: Date.parse(rec.time),
+        time: new Date(rec.time * 1000),
         id: rec.trade.id,
         market: rec.market,
         duration: rec.duration,
         order: rec.trade.order,
         taker: rec.trade.taker,
-        quantity: parseFloat(rec.trade.quantity.amount),
-        start: Date.parse(rec.trade.start),
-        expiration: Date.parse(rec.trade.expiration),
-        strike: parseFloat(rec.trade.strike.amount),
-        commission: parseFloat(rec.trade.commission.amount),
-        settleincentive: parseFloat(rec.trade.settleIncentive.amount),
-        legs: rec.trade.legs.map(leg => {
+        quantity: rec.trade.quantity.amount,
+        start: new Date(rec.trade.start * 1000),
+        expiration: new Date(rec.trade.expiration * 1000),
+        strike: rec.trade.strike.amount,
+        commission: rec.trade.commission.amount,
+        settleincentive: rec.trade.settleIncentive.amount,
+        legs: rec.trade.legsList.map(leg => {
           return {
             leg_id: leg.leg_id,
             type: leg.type ? "call" : "put",
             long: leg.long,
             short: leg.short,
             final: leg.final,
-            backing: parseFloat(leg.backing.amount),
-            premium: parseFloat(leg.premium.amount),
-            cost: parseFloat(leg.cost.amount),
-            quantity: parseFloat(leg.quantity.amount),
+            backing: leg.backing.amount,
+            premium: leg.premium.amount,
+            cost: leg.cost.amount,
+            quantity: leg.quantity.amount,
             quoted: {
               id: leg.quoted.id,
-              premium: parseFloat(leg.quoted.premium.amount),
-              spot: parseFloat(leg.quoted.spot.amount)
+              premium: leg.quoted.premium.amount,
+              spot: leg.quoted.spot.amount
             }
           }
         })
@@ -66,24 +64,23 @@ module.exports = {
       return obj
     },
     "trade.end": rec => {
-      console.log(JSON.stringify(rec, null, 2))
       const obj = {
         event: "trade.end",
         height: rec.height,
-        time: Date.parse(rec.time),
+        time: new Date(rec.time * 1000),
         id: rec.id,
         long: rec.long,
-        final: parseFloat(rec.final.amount),
-        settlements: rec.settlements.map(s => {
+        final: rec.pb_final.amount,
+        settlements: rec.settlementsList.map(s => {
           return {
-            leg_id: s.leg_id,
+            leg_id: s.legId,
             settle: {
-              account: s.settle_account,
-              amount: parseFloat(s.settle.amount)
+              account: s.settleAccount,
+              amount: s.settle.amount
             },
             refund: {
-              account: s.refund_account,
-              amount: parseFloat(s.refund.amount)
+              account: s.refundAccount,
+              amount: s.refund.amount
             }
           }
         })
@@ -93,50 +90,49 @@ module.exports = {
     "settle.finalize": rec => {
       const obj = {  
         event: "settle.finalize",
-        incentive: parseFloat(rec.incentive.amount),
-        commission: parseFloat(rec.commission.amount)
+        incentive: rec.incentive.amount,
+        commission: rec.commission.amount
       }
       return obj
     },
     "quote.create": rec => {
       const obj = {
         event: "quote.create",
-        backing: parseFloat(rec.backing.amount),
-        commission: parseFloat(rec.commission.amount)
+        backing: rec.backing.amount,
+        commission: rec.commission.amount
       }
       return obj
     },
     "quote.deposit": rec => {
       const obj = {
         event: "quote.deposit",
-        backing: parseFloat(rec.backing.amount),
-        commission: parseFloat(rec.commission.amount)
+        backing: rec.backing.amount,
+        commission: rec.commission.amount
       }
       return obj
     },
     "quote.update": rec => {
       const obj = {
         event: "quote.update",
-        commission: parseFloat(rec.commission.amount)
+        commission: rec.commission.amount
       }
       return obj
     },
     "quote.withdraw": rec => {
       const obj = {
         event: "quote.withdraw",
-        backing: parseFloat(rec.backing.amount),
-        commission: parseFloat(rec.commission.amount)
+        backing: rec.backing.amount,
+        commission: rec.commission.amount
       }
       return obj
     }
   },
   ledgerTx: {
     "deposit": (acct, rec) => {
-      //console.log("rec=" + JSON.stringify(rec, null, 2))
       const obj = {
         event: "deposit",
         height: rec.height,
-        time: rec.time,
+        time: new Date(rec.time * 1000),
         amount: rec.amount,
         commission: 0,
         debit: 0,
@@ -149,7 +145,7 @@ module.exports = {
       const obj = {
         event: "withdraw",
         height: rec.height,
-        time: rec.time,
+        time: new Date(rec.time * 1000),
         amount: rec.amount,
         commission: 0,
         debit: rec.amount,
@@ -159,11 +155,11 @@ module.exports = {
       return obj
     },
     "quote.cancel": (acct, rec) => {
-      const refund = parseFloat(rec.refund.amount)
+      const refund = rec.refund.amount
       const obj = {
         event: "quote.cancel",
         height: rec.height,
-        time: Date.parse(rec.time),
+        time: new Date(rec.time * 1000),
         id: rec.id,
         market: rec.market,
         duration: rec.duration,
@@ -175,12 +171,12 @@ module.exports = {
       return obj
     },
     "quote.create": (acct, rec) => {
-      const backing = parseFloat(rec.backing.amount)
-      const commission = parseFloat(rec.commission.amount)
+      const backing = rec.backing.amount
+      const commission = rec.commission.amount
       const obj = {
         event: "quote.create",
         height: rec.height,
-        time: Date.parse(rec.time),
+        time: new Date(rec.time * 1000),
         id: rec.id,
         market: rec.market,
         duration: rec.duration,
@@ -194,12 +190,12 @@ module.exports = {
       return obj
     },
     "quote.deposit": (acct, rec) => {
-      const backing = parseFloat(rec.backing.amount)
-      const commission = parseFloat(rec.commission.amount)
+      const backing = rec.backing.amount
+      const commission = rec.commission.amount
       return {
         event: "quote.deposit",
         height: rec.height,
-        time: Date.parse(rec.time),
+        time: new Date(rec.time * 1000),
         id: rec.id,
         amount: backing,
         debit: backing + commission,
@@ -209,11 +205,11 @@ module.exports = {
       }
     },
     "quote.update": (acct, rec) => {
-      const commission = parseFloat(rec.commission.amount)
+      const commission = rec.commission.amount
       return {
         event: "quote.update",
         height: rec.height,
-        time: Date.parse(rec.time),
+        time: new Date(rec.time * 1000),
         id: rec.id,
         amount: 0,
         debit: commission,
@@ -222,12 +218,12 @@ module.exports = {
       }
     },
     "quote.withdraw": (acct, rec) => {
-      const backing = parseFloat(rec.backing.amount)
-      const commission = parseFloat(rec.commission.amount)
+      const backing = rec.backing.amount
+      const commission = rec.commission.amount
       return {
         event: "quote.withdraw",
         height: rec.height,
-        time: Date.parse(rec.time),
+        time: new Date(rec.time * 1000),
         id: rec.id,
         amount: backing,
         debit: 0,
@@ -237,16 +233,16 @@ module.exports = {
       }
     },
     "trade.start": (acct, rec) => {
-      const cost = parseFloat(rec.trade.cost.amount)
-      const commission = parseFloat(rec.trade.commission.amount) + parseFloat(rec.trade.settleIncentive.amount)
+      const cost = rec.trade.cost.amount
+      const commission = rec.trade.commission.amount + rec.trade.settleIncentive.amount
       const obj = {
         event: "trade.start",
         height: rec.height,
-        time: Date.parse(rec.time),
+        time: new Date(rec.time * 1000),
         id: rec.trade.id,
         market: rec.trade.market,
         duration: rec.trade.duration,
-        quantity: parseFloat(rec.trade.quantity),
+        quantity: rec.trade.quantity,
         amount: cost,
         premium: rec.trade.premium.amount,
         cost: cost,
@@ -259,16 +255,16 @@ module.exports = {
       return obj 
     },
     "trade.end": (acct, rec) => {
-      const settle = parseFloat(rec.settle.amount)
+      const settle = rec.settle.amount
       var commission = 0
       var credit = settle
       if (rec.settler === acct) {
-        credit += parseFloat(rec.incentive.amount) - parseFloat(rec.commission.amount)
+        credit += rec.incentive.amount - rec.commission.amount
       }
       const obj = {
         event: "trade.end",
         height: rec.height,
-        time: Date.parse(rec.time),
+        time: new Date(rec.time * 1000),
         id: rec.id,
         amount: settle,
         settle: settle,

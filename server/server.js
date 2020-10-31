@@ -1,13 +1,18 @@
 const fs = require('fs')
 const https = require('https')
 const ws = require('ws')
-const protocol = require('../lib/protocol.js')
 const axios = require('axios')
 const objecthash = require('object-hash')
 const crypto = require('crypto')
 const format = require('./format.js')
 
+const protocol = require('../lib/protocol.js')
 const config = JSON.parse(fs.readFileSync('./config.json'))
+
+const GRPC = require ('../lib/grpc.js')
+const grpc = new GRPC("http://" + config.tendermint)
+
+const decodeResult = require('../lib/result.js')
 
 // Set to true if you want blocks and events stored in mongo
 const USE_DATABASE = config.use_database 
@@ -15,8 +20,10 @@ const USE_DATABASE = config.use_database
 // This seems to work regardless so disabling with default to true
 const PRUNING_OFF = true
 
-const LOG_API = false
-const LOG_TX = false
+const LOG_API = true
+const LOG_TX = true
+
+var chainid = null
 
 if (USE_DATABASE) {
   var db = require('./database.js')
@@ -34,7 +41,6 @@ process.on('unhandledRejection', error => {
 
 // Subscriptions (websocket)
 const tendermint = config.tendermint
-const rest = config.rest
 
 // Transactions
 const NEWBLOCK = "tm.event='NewBlock'"
@@ -51,58 +57,16 @@ const queryTendermint = async url => {
   return res.data.result
 }
 
-const queryCosmos = async (path, height) => {
-  var query = "http://" + tendermint + '/abci_query?path="/custom' + path + '"'
-  if (height !== undefined) {
-    query = query + "&height=" + height
-  }
-  const res = await axios.get(query)
-  if (res.data.result.response.code !== 0) {
-    console.log("query=" + query)
-    console.log(JSON.stringify(res.data, null, 2))
-    const obj = res.data.result.response.log
-    //console.log(JSON.stringify(obj))
-    throw new Error(obj)
-  }
-  if (res.data.result.response.value === null) {
-    throw new Error("Received null response")
-  } else {
-    const data = Buffer.from(res.data.result.response.value, 'base64')
-    return JSON.parse(data.toString())
-  }
-}
-
-const queryRestServer = async path => {
-  var query = "http://" + rest + path
-  const res = await axios.get(query)
-  return res.data
-}
-
-const postRestServer = async (path, body) => {
-  var query = "http://" + rest + path
-  const res = await axios.post(query, body)
-  return res.data
-}
-
-const marshalTx = async tx => {
-  const res = await postRestServer('/txs/encode', tx)
-  return res.tx
-}
-
-const unmarshalTx = async b64 => {
-  const res = await postRestServer('/txs/decode', {
-    tx: b64
-  })
-  return res.result
-}
-
 const queryHistBalance = async (acct, height) => {
+  /*
   if (USE_DATABASE) {
     const balance = await queryCosmos("/microtick/account/" + acct, height)
     return parseFloat(balance.dai)
   } else {
     return 0
   }
+  */
+  return 0
 }
 
 // API query caching
@@ -116,24 +80,6 @@ const shortHash = hash => {
   return "'" + hash + "'"
 }
 
-// Tx sequencing
-
-const nextSequenceNumber = (acct, res) => {
-  if (cache.accounts === undefined) {
-    cache.accounts = {}
-  }
-  if (cache.accounts[acct] === undefined) {
-    cache.accounts[acct] = {}
-  }
-  if (cache.accounts[acct].nextSequenceNumber === undefined) {
-    cache.accounts[acct].pendingSequenceNumber = parseInt(res.sequence, 10)
-    cache.accounts[acct].queue = {}
-  } else {
-    res.sequence = cache.accounts[acct].nextSequenceNumber.toString()
-  }
-  cache.accounts[acct].nextSequenceNumber = parseInt(res.sequence, 10) + 1
-}
-
 setInterval(async () => {
   if (cache === undefined || cache.accounts === undefined) {
     return
@@ -141,16 +87,19 @@ setInterval(async () => {
   const accts = Object.keys(cache.accounts)
   accts.map(async acct => {
     const pool = cache.accounts[acct]
-    if (pool.queue === undefined || pool.pendingSequenceNumber === undefined) return
-    if (pool.queue[pool.pendingSequenceNumber] !== undefined) {
-      await pool.queue[pool.pendingSequenceNumber].submit(acct, pool.pendingSequenceNumber)
-      delete pool.queue[pool.pendingSequenceNumber]
-      pool.pendingSequenceNumber++
-    }
+    if (pool.queue === undefined || pool.queue.length === 0) return
+    const lowestSequence = pool.queue.reduce((acc, item) => {
+      if (acc === null) return item
+      if (acc.sequence < item.sequence) return acc
+      return item
+    }, [])
+    pool.queue = pool.queue.filter(el => {
+      if (el.sequence === lowestSequence.sequence) return false
+      return true
+    })
+    await lowestSequence.submit(acct)
   })
 }, 100)
-
-// Tendermint websocket (single connection for new blocks)
 
 // Added at subsciption time: mapping market -> []id
 const marketSubscriptions = {}
@@ -305,7 +254,10 @@ const handleNewBlock = async obj => {
   processing = true
 
   chainHeight = parseInt(obj.result.data.value.block.header.height, 10)
-  const chainid = obj.result.data.value.block.header.chain_id
+  if (chainid === null) {
+    chainid = obj.result.data.value.block.header.chain_id
+    console.log("Setting chain ID=" + chainid)
+  }
   if (USE_DATABASE) {
     if (syncing) return
     
@@ -322,7 +274,7 @@ const handleNewBlock = async obj => {
       //console.log("chainHeight=" + chainHeight)
       console.log("Syncing...")
       for (var i=dbHeight + 1; i < chainHeight; i++) {
-        await processBlock(chainid, i)
+        await processBlock(i)
       }
       console.log("Done syncing...")
       syncing = false
@@ -333,7 +285,7 @@ const handleNewBlock = async obj => {
     accounts: {}
   }
   
-  await processBlock(chainid, chainHeight)
+  await processBlock(chainHeight)
     
   // Check pending Tx hashes
   const hashes = Object.keys(pending)
@@ -342,7 +294,7 @@ const handleNewBlock = async obj => {
   processing = false
 }
 
-const processBlock = async (chainid, height) => {
+const processBlock = async (height) => {
   curheight = height
   //console.log(JSON.stringify(obj, null, 2))
   const block = await queryTendermint('/block?height=' + height)
@@ -371,26 +323,38 @@ const processBlock = async (chainid, height) => {
       //console.log("TX #" + i)
       const txb64 = txs[i]
       var hash = crypto.createHash('sha256').update(Buffer.from(txb64, 'base64')).digest('hex').toUpperCase()
-      const res64 = results.txs_results[i]
+      const txr = results.txs_results[i]
+      //console.log("txr=" + JSON.stringify(txr, null, 2))
       if (pending[hash] !== undefined) {
-        if (res64.code !== 0) {
-          pending[hash].failure(new Error(res64.log))
+        if (txr.code !== 0) {
+          if (LOG_TX) {
+            console.log("  hash " + hash + " unsuccessful")
+          }
+          pending[hash].failure(new Error(txr.log))
         } else {
-          pending[hash].success({ tx_result: res64, height: block.height, hash: hash })
+          if (LOG_TX) {
+            console.log("  hash " + hash + " successful")
+          }
+          pending[hash].success({ tx_result: txr, height: block.height, hash: hash })
         }
         delete pending[hash]
       }
-      if (res64.code === 0) {
+      //console.log(txb64)
+      //const txb = Buffer.from(txb64, 'base64')
+      //const rawtx = tx.Tx.deserializeBinary(txb).toObject()
+      //console.log("RAW TX=" + JSON.stringify(rawtx, null, 2))
+      //console.log(res64)
+      if (txr.code === 0) {
         // Tx successful
         try {
           const txstruct = {
             events: {}
           }
-          if (res64.data !== null) {
-            txstruct.result = JSON.parse(Buffer.from(res64.data, 'base64').toString())
+          if (txr.data !== null) {
+            txstruct.result = decodeResult(txr.data)
           }
-          for (var j=0; j<res64.events.length; j++) {
-            const event = res64.events[j]
+          for (var j=0; j<txr.events.length; j++) {
+            const event = txr.events[j]
             for (var attr = 0; attr < event.attributes.length; attr++) {
               const a = event.attributes[attr]
               const key = Buffer.from(a.key, 'base64').toString()
@@ -452,6 +416,7 @@ const processBlock = async (chainid, height) => {
         } catch (err) {
           console.log(err)
           console.log("UNKNOWN TX TYPE")
+          //process.exit()
         }
       }
     }
@@ -482,7 +447,8 @@ const processMicrotickTx = async (block, tx) => {
     if (e.startsWith("acct.")) {
       const account = e.slice(5)
       if (PRUNING_OFF) {
-        tx.result.balance[account] = await queryHistBalance(account, block.height)
+        console.log("WARNING: queryHistBalance not working yet")
+        //tx.result.balance[account] = await queryHistBalance(account, block.height)
       }
       if (USE_DATABASE) {
         await db.insertAccountEvent(block.height, account, tx.events[e], tx.result)
@@ -512,16 +478,16 @@ const processMicrotickTx = async (block, tx) => {
           const trade = tx.result.trade
           const start = Math.floor(Date.parse(trade.start) / 1000)
           const end = Math.floor(Date.parse(trade.expiration) / 1000)
-          for (var i=0; i<trade.legs.length; i++) {
-            const leg = trade.legs[i]
-            await db.insertAction(id, "long", leg.long, start, end, 0, parseFloat(leg.premium.amount))
+          for (var i=0; i<trade.legsList.length; i++) {
+            const leg = trade.legsList[i]
+            await db.insertAction(id, "long", leg.lonr, start, end, 0, parseFloat(leg.premium.amount))
             await db.insertAction(id, "short", leg.short, start, end, 0, parseFloat(leg.premium.amount))
           }
         }
         if (type === "event.settle") {
           const trade = tx.result
-          for (var i=0; i<trade.settlements.length; i++) {
-            const s = trade.settlements[i]
+          for (var i=0; i<trade.settlementsList.length; i++) {
+            const s = trade.settlementsList[i]
             const amt = parseFloat(s.settle.amount)
             if (amt > 0) {
               await db.updateAction(id, s.long, 0, amt) 
@@ -688,115 +654,110 @@ const handleMessage = async (env, name, payload) => {
         res = await queryTendermint('/status')
         returnObj = {
           status: true,
-          chainid: res.node_info.network,
+          chainid: chainid,
           block: parseInt(res.sync_info.latest_block_height, 10),
           timestamp: Math.floor(new Date(res.sync_info.latest_block_time).getTime() / 1000)
         }
         break
       case 'getacctinfo':
-        res = await queryCosmos('/microtick/account/' + payload.acct)
+        var res = await grpc.queryAccount(payload.acct)
         returnObj = {
           status: true,
           info: {
             account: res.account,
-            balance: parseFloat(res.dai),
-            stake: parseFloat(res.tick),
-            numquotes: res.numQuotes,
-            numtrades: res.numTrades,
-            activeQuotes: res.activeQuotes,
-            activeTrades: res.activeTrades,
-            quoteBacking: parseFloat(res.quoteBacking.amount),
-            tradeBacking: parseFloat(res.tradeBacking.amount),
-            settleBacking: parseFloat(res.settleBacking.amount)
+            balance: res.balancesList.dai,
+            stake: res.balancesList.tick,
+            placedquotes: res.placedQuotes,
+            placedtrades: res.placedTrades,
+            activeQuotes: res.activeQuotesList,
+            activeTrades: res.activeTradesList,
+            quoteBacking: res.quoteBacking.amount,
+            tradeBacking: res.tradeBacking.amount,
+            settleBacking: res.settleBacking.amount
           }
-        }
-        break
-      case 'getacctperf':
-        if (USE_DATABASE) {
-          var start = payload.start
-          if (typeof start === "string") {
-            start = Math.floor(Date.parse(start) / 1000)
-          }
-          var end = payload.end
-          if (typeof end === "string") {
-            end = Math.floor(Date.parse(end) / 1000)
-          }
-          res = await db.queryAccountPerformance(payload.acct, start, end)
-          returnObj = {
-            status: true,
-            info: {
-              count: res.count,
-              debit: res.debit,
-              credit: res.credit,
-              percent: res.percent
-            }
-          }
-        } else {
-          throw new Error("Database turned off")
         }
         break
       case 'getmarketinfo':
-        res = await queryCosmos('/microtick/market/' + payload.market)
+        res = await grpc.queryMarket(payload.market)
         if (res.orderBooks === null) res.orderBooks = []
         returnObj = {
           status: true,
           info: {
             market: res.market,
-            consensus: parseFloat(res.consensus.amount),
-            sumBacking: parseFloat(res.sumBacking.amount),
-            sumWeight: parseFloat(res.sumWeight.amount),
-            orderBooks: res.orderBooks.map(ob => {
+            consensus: res.consensus.amount,
+            totalBacking: res.totalBacking.amount,
+            totalWeight: res.totalWeight.amount,
+            orderBooks: res.orderBooksList.map(ob => {
               return {
                 name: ob.name,
-                sumBacking: parseFloat(ob.sumBacking.amount),
-                sumWeight: parseFloat(ob.sumWeight.amount),
-                insideAsk: parseFloat(ob.insideAsk.amount),
-                insideBid: parseFloat(ob.insideBid.amount),
-                insideCallAsk: parseFloat(ob.insideCallAsk.amount),
-                insideCallBid: parseFloat(ob.insideCallBid.amount),
-                insidePutAsk: parseFloat(ob.insidePutAsk.amount),
-                insidePutBid: parseFloat(ob.insidePutBid.amount)
+                sumBacking: ob.sumBacking.amount,
+                sumWeight: ob.sumWeight.amount,
+                insideAsk: ob.insideAsk.amount,
+                insideBid: ob.insideBid.amount,
+                insideCallAsk: ob.insideCallAsk.amount,
+                insideCallBid: ob.insideCallBid.amount,
+                insidePutAsk: ob.insidePutAsk.amount,
+                insidePutBid: ob.insidePutBid.amount
               }
             })
           }
         }
         break
-      case 'getorderbookinfo':
-        res = await queryCosmos('/microtick/orderbook/' + payload.market + "/" + 
-          payload.duration)
-        const quoteListParser = q => {
-          return {
-            id: q.id,
-            premium: parseFloat(q.premium),
-            quantity: parseFloat(q.quantity)
-          }
-        }
-        returnObj = {
-          status: true,
-          info: {
-            sumBacking: parseFloat(res.sumBacking.amount),
-            sumWeight: parseFloat(res.sumWeight.amount),
-            callAsks: res.callAsks.map(quoteListParser),
-            putAsks: res.putAsks.map(quoteListParser),
-            callBids: res.callBids.map(quoteListParser),
-            putBids: res.putBids.map(quoteListParser)
-          }
-        }
-        break
       case 'getmarketspot':
-        res = await queryCosmos('/microtick/consensus/' + payload.market)
+        res = await grpc.queryConsensus(payload.market)
         returnObj = {
           status: true,
           info: {
             market: res.market,
-            consensus: parseFloat(res.consensus.amount),
-            sumbacking: parseFloat(res.sumBacking.amount),
-            sumweight: parseFloat(res.sumWeight.amount)
+            consensus: res.consensus.amount,
+            sumbacking: res.totalBacking.amount,
+            sumweight: res.totalWeight.amount
+          }
+        }
+        break
+      case 'getorderbookinfo':
+        res = await grpc.queryOrderBook(payload.market, payload.duration)
+        const quoteListParser = q => {
+          return {
+            id: q.id,
+            premium: q.premium.amount,
+            quantity: q.quantity.amount
+          }
+        }
+        returnObj = {
+          status: true,
+          info: {
+            sumBacking: res.sumBacking.amount,
+            sumWeight: res.sumWeight.amount,
+            callAsks: res.callAsksList.map(quoteListParser),
+            putAsks: res.putAsksList.map(quoteListParser),
+            callBids: res.callBidsList.map(quoteListParser),
+            putBids: res.putBidsList.map(quoteListParser)
+          }
+        }
+        break
+      case 'getsyntheticinfo':
+        res = await grpc.querySynthetic(payload.market, payload.duration)
+        const synListParser = q => {
+          return {
+            askId: q.askId,
+            bidId: q.bidId,
+            spot: q.spot.amount,
+            quantity: q.quantity.amount
+          }
+        }
+        returnObj = {
+          status: true,
+          info: {
+            consensus: res.consensus.amount,
+            weight: res.weight.amount,
+            asks: res.asksList.map(synListParser),
+            bids: res.bidsList.map(synListParser),
           }
         }
         break
       case 'getlivequote':
-        res = await queryCosmos('/microtick/quote/' + payload.id)
+        res = await grpc.queryQuote(payload.id)
         returnObj = {
           status: true,
           info: {
@@ -804,22 +765,24 @@ const handleMessage = async (env, name, payload) => {
             market: res.market,
             duration: res.duration,
             provider: res.provider,
-            backing: parseFloat(res.backing.amount),
-            spot: parseFloat(res.spot.amount),
-            ask: parseFloat(res.ask.amount),
-            bid: parseFloat(res.bid.amount),
-            quantity: parseFloat(res.quantity.amount),
-            callAsk: parseFloat(res.callAsk.amount),
-            callBid: parseFloat(res.callBid.amount),
-            putAsk: parseFloat(res.putAsk.amount),
-            putBid: parseFloat(res.putBid.amount),
-            modified: Date.parse(res.modified),
-            canModify: Date.parse(res.canModify)
+            backing: res.backing.amount,
+            ask: res.ask.amount,
+            bid: res.bid.amount,
+            quantity: res.quantity.amount,
+            consensus: res.consensus.amount,
+            spot: res.spot.amount,
+            delta: res.delta,
+            callAsk: res.callAsk.amount,
+            callBid: res.callBid.amount,
+            putAsk: res.putAsk.amount,
+            putBid: res.putBid.amount,
+            modified: res.modified * 1000,
+            canModify: res.canModify * 1000
           }
         }
         break
       case 'getlivetrade':
-        res = await queryCosmos('/microtick/trade/' + payload.id)
+        res = await grpc.queryTrade(payload.id)
         returnObj = {
           status: true,
           info: {
@@ -828,27 +791,28 @@ const handleMessage = async (env, name, payload) => {
             duration: res.duration,
             order: res.order,
             taker: res.taker,
-            start: Date.parse(res.start),
-            expiration: Date.parse(res.expiration),
-            strike: parseFloat(res.strike.amount),
-            currentSpot: parseFloat(res.currentSpot.amount),
-            currentValue: parseFloat(res.currentValue.amount),
-            commission: parseFloat(res.commission.amount),
-            settleIncentive: parseFloat(res.settleIncentive.amount),
-            legs: res.legs.map(leg => {
+            quantity: res.quantity.amount,
+            start: res.start * 1000,
+            expiration: res.expiration * 1000,
+            strike: res.strike.amount,
+            currentSpot: res.consensus.amount,
+            currentValue: res.currentValue,
+            commission: res.commission.amount,
+            settleIncentive: res.settleIncentive.amount,
+            legs: res.legsList.map(leg => {
               return {
                 leg_id: leg.leg_id,
-                type: leg.type ? "call" : "put",
-                backing: parseFloat(leg.backing.amount),
-                premium: parseFloat(leg.premium.amount),
-                quantity: parseFloat(leg.quantity.amount),
-                final: leg.final,
+                type: leg.type,
+                backing: leg.backing.amount,
+                premium: leg.premium.amount,
+                quantity: leg.quantity.amount,
+                cost: leg.cost.amount,
                 long: leg.long,
                 short: leg.short,
                 quoted: {
                   id: leg.quoted.id,
-                  premium: parseFloat(leg.quoted.premium.amount),
-                  spot: parseFloat(leg.quoted.spot.amount)
+                  premium: leg.quoted.premium.amount,
+                  spot: leg.quoted.spot.amount
                 }
               }
             })
@@ -927,128 +891,49 @@ const handleMessage = async (env, name, payload) => {
         } else {
           throw new Error("Database turned off")
         }
-      case 'createquote':
-        res = await queryCosmos("/microtick/generate/createquote/" +
-          env.acct + "/" + 
-          payload.market + "/" +
-          payload.duration + "/" +
-          payload.backing + "/" + 
-          payload.spot + "/" +
-          payload.ask + "/" +
-          payload.bid)
-        nextSequenceNumber(env.acct, res)
+      case 'getauthinfo':
+        // get the account number, sequence number
+        res = await grpc.queryAuthAccount(payload.acct)
         return {
           status: true,
-          msg: res
-        }
-      case 'cancelquote':
-        res = await queryCosmos("/microtick/generate/cancelquote/" +
-          env.acct + "/" + 
-          payload.id)
-        nextSequenceNumber(env.acct, res)
-        return {
-          status: true,
-          msg: res
-        }
-      case 'depositquote':
-        res = await queryCosmos("/microtick/generate/depositquote/" +
-          env.acct + "/" +
-          payload.id + "/" + 
-          payload.deposit)
-        nextSequenceNumber(env.acct, res)
-        return {
-          status: true,
-          msg: res
-        }
-      case 'withdrawquote':
-        res = await queryCosmos("/microtick/generate/withdrawquote/" +
-          env.acct + "/" +
-          payload.id + "/" + 
-          payload.withdraw)
-        nextSequenceNumber(env.acct, res)
-        return {
-          status: true,
-          msg: res
-        }
-      case 'updatequote':
-        res = await queryCosmos("/microtick/generate/updatequote/" + 
-          env.acct + "/" +
-          payload.id + "/" + 
-          payload.newspot + "/" +
-          payload.newask + "/" + 
-          payload.newbid)
-        nextSequenceNumber(env.acct, res)
-        return {
-          status: true,
-          msg: res
-        }
-      case 'markettrade':
-        res = await queryCosmos("/microtick/generate/markettrade/" + 
-          env.acct + "/" +
-          payload.market + "/" + 
-          payload.duration + "/" +
-          payload.ordertype + "/" + 
-          payload.quantity)
-        nextSequenceNumber(env.acct, res)
-        return {
-          status: true,
-          msg: res
-        }
-      case 'picktrade':
-        res = await queryCosmos("/microtick/generate/picktrade/" +
-          env.acct + "/" + 
-          payload.id + "/" + 
-          payload.ordertype)
-        nextSequenceNumber(env.acct, res)
-        return {
-          status: true,
-          msg: res
-        }
-      case 'settletrade':
-        res = await queryCosmos("/microtick/generate/settletrade/" +
-          env.acct + "/" +
-          payload.id)
-        nextSequenceNumber(env.acct, res)
-        return {
-          status: true,
-          msg: res
-        }
-      case 'postenvelope':
-        // generate dummy create market tx to get the account number, sequence number and chain id
-        res = await queryCosmos("/microtick/generate/createmarket/" + 
-          env.acct + "/dummy")
-        nextSequenceNumber(env.acct, res)
-        return {
-          status: true,
-          msg: {
-            accountNumber: res.accountNumber,
-            chainId: res.chainId,
+          info: {
+            chainid: chainid,
+            account: res.accountNumber,
             sequence: res.sequence
           }
         }
       case 'posttx':
         res = await new Promise(async (outerResolve, outerReject) => {
           const pendingTx = {
+            sequence: payload.sequence,
             submitted: false,
-            txid: txcounter++,
-            submit: async (acct, sequence) => {
+            submit: async (acct) => {
               if (pendingTx.submitted) return
               try {
-                const txtype = payload.tx.value.msg[0].type
-                console.log("Posting [" + env.id + "] TX " + txtype + ": sequence=" + sequence) 
-                //console.log(JSON.stringify(payload.tx, null, 2))
+                const txtype = payload.type
+                console.log("Posting [" + env.id + "] TX " + txtype)
+                
                 pendingTx.submitted = true
-                const b64 = await marshalTx(payload.tx)
-                const hex = Buffer.from(b64, 'base64').toString('hex')
-                const query = '/broadcast_tx_sync?tx=0x' + hex
-                res = await queryTendermint(query)
-                if (res.code !== 0) {
+                const res = await axios.post('http://' + tendermint, {
+                  jsonrpc: "2.0",
+                  id: 1,
+                  method: "broadcast_tx_commit",
+                  params: {
+                    tx: payload.tx
+                  }
+                }, {
+                  headers: {
+                    "Content-Type": "text/json"
+                  }
+                })
+  
+                if (res.data.result.check_tx.code !== 0) {
                   // error
-                  outerReject(new Error(res.log))
-                  console.log("  failed: " + res.log)
+                  outerReject(new Error(res.data.result.check_tx.log))
+                  console.log("  failed: " + res.data.result.check_tx.log)
                   return
                 } else {
-                  if (LOG_TX) console.log("  hash=" + shortHash(res.hash))
+                  if (LOG_TX) console.log("  hash=" + shortHash(res.data.result.hash))
                 }
                 const txres = await new Promise((resolve, reject) => {
                   const obj = {
@@ -1056,17 +941,15 @@ const handleMessage = async (env, name, payload) => {
                       resolve(txres)
                     },
                     failure: err => {
+                      console.log("failure")
                       reject(err)
                     },
                     timedout: false,
                     tries: 0
                   }
                   setTimeout(() => {obj.timedout = true}, TXTIMEOUT)
-                  pending[res.hash] = obj
+                  pending[res.data.result.hash] = obj
                 })
-                if (txres.tx_result.data !== null) {
-                  txres.tx_result.data = JSON.parse(Buffer.from(txres.tx_result.data, 'base64').toString())
-                }
                 if (txres.tx_result.events !== undefined) {
                   for (var i=0; i<txres.tx_result.events.length; i++) {
                     var t = txres.tx_result.events[i]
@@ -1082,7 +965,7 @@ const handleMessage = async (env, name, payload) => {
                 }
                 outerResolve(txres)
               } catch (err) {
-                console.log("TX failed: " + acct + ": sequence=" + sequence)
+                console.log("TX failed: " + acct)
                 outerReject(err)
               }
             }
@@ -1092,17 +975,10 @@ const handleMessage = async (env, name, payload) => {
           }
           if (cache.accounts[env.acct] === undefined) {
             cache.accounts[env.acct] = {
-              queue: {}
+              queue: []
             }
           }
-          const seq = parseInt(payload.sequence, 10)
-          cache.accounts[env.acct].queue[seq] = pendingTx
-          if (cache.accounts[env.acct].pendingSequenceNumber === undefined) {
-            cache.accounts[env.acct].pendingSequenceNumber = seq
-          }
-          if (cache.accounts[env.acct].nextSequenceNumber === undefined) {
-            cache.accounts[env.acct].pendingSequenceNumber + 1
-          }
+          cache.accounts[env.acct].queue.push(pendingTx)
         })
         return {
           status: true,
@@ -1122,7 +998,7 @@ const handleMessage = async (env, name, payload) => {
     
   } catch (err) {
     console.log("API error: " + name + ": " + err.message)
-    console.log(err)
+    //console.log(err)
     //if (err !== undefined) console.log(err)
     return {
       status: false,

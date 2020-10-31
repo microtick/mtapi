@@ -1,0 +1,9 @@
+{
+  "dependencies": {
+    "axios": "^0.21.0",
+    "bech32": "^1.1.4",
+    "bignumber.js": "^9.0.1",
+    "google-protobuf": "^3.13.0",
+    "js-sha256": "^0.9.0"
+  }
+}

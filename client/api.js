@@ -1,6 +1,8 @@
 const WebSocketClient = require('websocket').w3cwebsocket
+
 const wallet = require('./wallet.js')
-const protocol = require('./protocol.js')
+const protocol = require('../lib/protocol.js')
+const codec = require('../lib/tx.js')
 
 var client
 const connectServer = (url, onOpen, onMessage) => {
@@ -45,6 +47,7 @@ class API {
       return await this.handleMessage(env, name, payload)
     }, async (env, msg) => {
       if (msg.type === 'block') {
+        delete this.auth
         for (var i=0; i<this.blockHandlers.length; i++) {
           const handler = this.blockHandlers[i] 
           await handler(msg.payload)
@@ -127,10 +130,11 @@ class API {
     // If keys passed in, use them, otherwise generate new account
     if (keys === "software") {
       console.log("Creating wallet")
-      const mnemonic = await wallet.seed()
+      const mnemonic = await wallet.generateNewMnemonic()
       if (typeof cb === "function") cb(mnemonic)
-      this.wallet = await wallet.generate(mnemonic)
-      this.wallet.type = "software"
+      this.wallet = wallet.newFromHD("micro", 0, 0)
+      await this.wallet.init(mnemonic)
+      this.wallettype = "software"
     } else if (keys === "ledger") {
       this.getApp = cb
       const app = await this.getApp()
@@ -139,23 +143,15 @@ class API {
       if (response.return_code !== 0x9000) {
         throw new Error("Ledger initialization failed")
       }
-      this.wallet = {
-        type: "ledger",
-        publicKey: response.compressed_pk.toString('hex'),
-        cosmosAddress: response.bech32_address,
-      }
+      this.wallet = wallet.newFromLedger(response.compressed_pk.toString('hex'), response.bech32_address)
     } else if (Array.isArray(keys)) {
       const mnemonic = keys.join(" ")
-      this.wallet = await wallet.generate(mnemonic)
-      this.wallet.type = "software"
+      this.wallet =wallet.newFromHD("micro", 0, 0)
+      await this.wallet.init(mnemonic)
+      this.wallettype = "software"
     } else {
       console.log("Using wallet: " + keys.acct)
-      this.wallet = {
-        type: "software",
-        privateKey: keys.priv,
-        publicKey: keys.pub,
-        cosmosAddress: keys.acct
-      }
+      this.wallet = wallet.newFromKey("micro", Buffer.from(keys.priv, 'hex'))
     }
     
     const api = this
@@ -163,7 +159,7 @@ class API {
       connectServer(this.url, async client => {
         this.client = client
         const response = await this.protocol.newMessage('connect', {
-          acct: this.wallet.cosmosAddress
+          acct: this.wallet.address
         })
         if (!response.status) {
           reject()
@@ -197,19 +193,19 @@ class API {
     })
     
     return {
-      type: this.wallet.type,
-      acct: this.wallet.cosmosAddress,
-      pub: this.wallet.publicKey,
-      priv: this.wallet.privateKey
+      type: this.wallettype,
+      acct: this.wallet.address,
+      pub: this.wallet.pub.toString("hex"),
+      priv: this.wallet.priv.toString("hex")
     }
   }
   
   async getWallet() {
     return {
-      type: this.wallet.type,
-      acct: this.wallet.cosmosAddress,
-      pub: this.wallet.publicKey,
-      priv: this.wallet.privateKey
+      type: this.wallettype,
+      acct: this.wallet.address,
+      pub: this.wallet.pub.toString("hex"),
+      priv: this.wallet.priv.toString("hex")
     }
   }
   
@@ -269,24 +265,22 @@ class API {
     return response.info
   }
   
-  async getAccountPerformance(acct, start, end) {
-    const response = await this.protocol.newMessage('getacctperf', {
-      acct: acct,
-      start: start,
-      end: end
-    })
-    if (!response.status) {
-      throw new Error("Get account performance: " + response.error)
-    }
-    return response.info
-  }
-  
   async getMarketInfo(market) {
     const response = await this.protocol.newMessage('getmarketinfo', {
       market: market
     })
     if (!response.status) {
       throw new Error("Get market info: " + response.error)
+    }
+    return response.info
+  }
+  
+  async getMarketSpot(market) {
+    const response = await this.protocol.newMessage('getmarketspot', {
+      market: market
+    })
+    if (!response.status) {
+      throw new Error("Get market spot: " + response.error)
     }
     return response.info
   }
@@ -302,12 +296,13 @@ class API {
     return response.info
   }
   
-  async getMarketSpot(market) {
-    const response = await this.protocol.newMessage('getmarketspot', {
-      market: market
+  async getSyntheticInfo(market, dur) {
+    const response = await this.protocol.newMessage('getsyntheticinfo', {
+      market: market,
+      duration: dur
     })
     if (!response.status) {
-      throw new Error("Get market spot: " + response.error)
+      throw new Error("Get synthetic info: " + response.error)
     }
     return response.info
   }
@@ -407,8 +402,19 @@ class API {
   
   // Transactions
   
+  async getAccountAuth(acct) {
+    const response = await this.protocol.newMessage('getauthinfo', {
+      acct: acct
+    })
+    if (!response.status) {
+      throw new Error("Account not found: please add funds and try again")
+    }
+    return response.info
+  }
+    
+    /*
   async postTx(msg) {
-    if (this.wallet.type === "ledger") {
+    if (this.wallettype === "ledger") {
       const app = await this.getApp()
       const path = [44, 118, 0, 0, 0]
       const message = wallet.prepare(msg.tx, msg.sequence, msg.accountNumber, msg.chainId)
@@ -460,110 +466,86 @@ class API {
     }
     return res.info
   }
+  */
   
-  async postEnvelope() {
-    const data = await this.protocol.newMessage('postenvelope')
-    if (!data.status) {
-      throw new Error("Post envelope: " + data.error)
+  async postTx(tx, txtype, gas) {
+    if (this.auth === undefined) {
+      this.auth = await this.getAccountAuth(this.wallet.address)
     }
-    return data.msg
+    const sequence = this.auth.sequence++
+    const hash = tx.createSigningHash(this.wallet.pub, this.auth.chainid, this.auth.account, sequence, gas)
+    if (this.wallettype === "ledger") {
+      // not supported yet
+    } else {
+      const sig = this.wallet.sign(hash)
+      var bytes = tx.generateBroadcastBytes(sig)
+    }
+    const res = await this.protocol.newMessage('posttx', {
+      tx: bytes.toString("base64"),
+      sequence: sequence,
+      type: txtype
+    })
+    if (!res.status) {
+      throw new Error("Post Tx: " + res.error)
+    }
+    return res.info
+  }
+  
+  async send(from, to, amount) {
+    const msg = new codec.Send(from, to, amount)
+    const tx = new codec.Tx(msg)
+    return await this.postTx(tx, "send", 200000)
   }
   
   async createQuote(market, duration, backing, spot, ask, bid) {
     if (bid === undefined) {
       bid = "0premium"
     }
-    const data = await this.protocol.newMessage('createquote', {
-      market: market,
-      duration: duration,
-      backing: backing,
-      spot: spot,
-      ask: ask,
-      bid: bid
-    })
-    if (!data.status) {
-      throw new Error("Create quote: " + data.error)
-    }
-    return await this.postTx(data.msg) 
+    const msg = new codec.Create(market, duration, this.wallet.address, backing, spot, ask, bid)
+    const tx = new codec.Tx(msg)
+    return await this.postTx(tx, "create", 1000000) 
   }
   
   async cancelQuote(id) {
-    const data = await this.protocol.newMessage('cancelquote', {
-      id: id
-    })
-    if (!data.status) {
-      throw new Error("Cancel quote: " + data.error)
-    }
-    return await this.postTx(data.msg)
+    const msg = new codec.Cancel(id, this.wallet.address)
+    const tx = new codec.Tx(msg)
+    return await this.postTx(tx, "cancel", 1000000)
   }
   
   async depositQuote(id, deposit) {
-    const data = await this.protocol.newMessage('depositquote', {
-      id: id,
-      deposit: deposit
-    })
-    if (!data.status) {
-      throw new Error("Deposit quote: " + data.error)
-    }
-    return await this.postTx(data.msg)
+    const msg = new codec.Deposit(id, this.wallet.address, deposit)
+    const tx = new codec.Tx(msg)
+    return await this.postTx(tx, "deposit", 1000000)
   }
   
   async withdrawQuote(id, withdraw) {
-    const data = await this.protocol.newMessage('withdrawquote', {
-      id: id,
-      withdraw: withdraw
-    })
-    if (!data.status) {
-      throw new Error("Withdraw quote: " + data.error)
-    }
-    return await this.postTx(data.msg)
+    const msg = new codec.Withdraw(id, this.wallet.address, withdraw)
+    const tx = new codec.Tx(msg)
+    return await this.postTx(tx, "withdraw", 1000000)
   }
   
   async updateQuote(id, newspot, newask, newbid) {
-    const data = await this.protocol.newMessage('updatequote', {
-      id: id,
-      newspot: newspot,
-      newask: newask,
-      newbid: newbid
-    })
-    if (!data.status) {
-      throw new Error("Update quote: " + data.error)
-    }
-    return await this.postTx(data.msg)
+    const msg = new codec.Update(id, this.wallet.address, newspot, newask, newbid)
+    const tx = new codec.Tx(msg)
+    return await this.postTx(tx, "update", 1000000)
   }
   
   async marketTrade(market, duration, ordertype, quantity) {
-    const data = await this.protocol.newMessage('markettrade', {
-      market: market,
-      duration: duration,
-      ordertype: ordertype,
-      quantity: quantity
-    })
-    if (!data.status) {
-      throw new Error(ordertype + ": " + data.error)
-    }
-    return await this.postTx(data.msg)
+    const msg = new codec.Trade(market, duration, this.wallet.address, ordertype, quantity)
+    const tx = new codec.Tx(msg)
+    return await this.postTx(tx, "trade", 1000000)
   }
   
   async pickTrade(id, ordertype) {
-    const data = await this.protocol.newMessage('picktrade', {
-      id: id,
-      ordertype: ordertype
-    })
-    if (!data.status) {
-      throw new Error(ordertype + ": " + data.error)
-    }
-    return await this.postTx(data.msg)
+    const msg = new codec.Pick(id, this.wallet.address, ordertype)
+    const tx = new codec.Tx(msg)
+    return await this.postTx(tx, "pick", 1000000)
   }
   
   async settleTrade(id) {
-    const data = await this.protocol.newMessage('settletrade', {
-      id: id
-    })
-    if (!data.status) {
-      throw new Error("Settle trade: " + data.error)
-    }
-    return await this.postTx(data.msg)
+    const msg = new codec.Settle(id, this.wallet.address)
+    const tx = new codec.Tx(msg)
+    return await this.postTx(tx, "settle", 1000000)
   }
   
 }
