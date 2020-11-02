@@ -12,6 +12,7 @@ const config = JSON.parse(fs.readFileSync('./config.json'))
 const GRPC = require ('../lib/grpc.js')
 const grpc = new GRPC("http://" + config.tendermint)
 
+const decodeTx = require('../lib/tx.js')
 const decodeResult = require('../lib/result.js')
 
 // Set to true if you want blocks and events stored in mongo
@@ -375,9 +376,14 @@ const processBlock = async (height) => {
             await processMicrotickTx(block, txstruct)
           } 
           if (txstruct.events.module === "bank" && txstruct.events.action === "send") {
-            const baseTx = await unmarshalTx(txb64)
-            const from = baseTx.msg[0].value.from_address
-            const to = baseTx.msg[0].value.to_address
+            const baseTx = decodeTx.Tx.deserialize(Buffer.from(txb64, "base64"))
+            const sendTx = baseTx.body.messagesList.reduce((acc, msg) => {
+              if (msg.typeUrl === "/cosmos.bank.v1beta1.MsgSend") {
+                return decodeTx.Send.bufferToObject(msg.value)
+              }
+            }, null)
+            const from = txstruct.events.sender
+            const to = txstruct.events.recipient
             const depositPayload = {
               type: "deposit",
               from: from,
