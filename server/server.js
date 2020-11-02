@@ -238,12 +238,17 @@ const sendAccountEvent = (acct, event, payload) => {
   }
 }
 
+var txlog
 const handleNewBlock = async obj => {
   if (processing) return
   if (syncing) return
 
   processing = true
 
+  if (LOG_TRANSFERS) {
+    txlog = "Transfers:"
+  }
+  
   chainHeight = parseInt(obj.result.data.value.block.header.height, 10)
   if (chainid === null) {
     chainid = obj.result.data.value.block.header.chain_id
@@ -275,6 +280,10 @@ const handleNewBlock = async obj => {
   }
   
   await processBlock(chainHeight)
+  
+  if (LOG_TRANSFERS) {
+    console.log(txlog)
+  }
     
   // Check pending Tx hashes
   const hashes = Object.keys(pending)
@@ -369,9 +378,8 @@ const processBlock = async (height) => {
           
           // Update account balances from any transfers
           if (!syncing && LOG_TRANSFERS) {
-            console.log("Transfers:")
             txstruct.transfers.map(transfer => {
-              console.log("  " + transfer.amount + " " + transfer.sender + " -> " + transfer.recipient)
+              txlog += "\n  " + transfer.amount + " " + transfer.sender + " -> " + transfer.recipient
             })
           }
           if (USE_DATABASE) {
