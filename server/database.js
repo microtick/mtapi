@@ -59,6 +59,7 @@ const DB = {
     
     await db.createCollection('meta', { capped: true, max: 1, size: 4096 })
     await db.createCollection('counters', { capped: true, max: 1, size: 4096 })
+    await db.createCollection('balances')
     await db.createCollection('blocks')
     await db.createCollection('ticks')
     await db.createCollection('account')
@@ -271,6 +272,29 @@ const DB = {
     }, {
       $set: obj
     })
+  },
+  
+  updateAccountBalance: async (account, denom, delta) => {
+    const inc = {}
+    inc [denom] = delta
+    await db.collection('balances').updateOne({
+      account: account
+    }, {
+      $inc: inc
+    }, {
+      upsert: true
+    })
+  },
+  
+  getAccountBalance: async (account, denom) => {
+    const curs = await db.collection('balances').find({
+      account: account
+    })
+    if (curs.hasNext()) {
+      const rec = await curs.next()
+      return rec[denom]
+    }
+    return 0
   },
   
   queryAccountPerformance: async (account, start, end) => {

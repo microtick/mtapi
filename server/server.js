@@ -14,6 +14,7 @@ const grpc = new GRPC("http://" + config.tendermint)
 
 const decodeTx = require('../lib/tx.js')
 const decodeResult = require('../lib/result.js')
+const util = require('../lib/util.js')
 
 // Set to true if you want blocks and events stored in mongo
 const USE_DATABASE = config.use_database 
@@ -21,8 +22,9 @@ const USE_DATABASE = config.use_database
 // This seems to work regardless so disabling with default to true
 const PRUNING_OFF = true
 
-const LOG_API = true
-const LOG_TX = true
+const LOG_API = false
+const LOG_TX = false
+const LOG_TRANSFERS = true
 
 var chainid = null
 
@@ -56,18 +58,6 @@ const queryTendermint = async url => {
   const query = "http://" + tendermint + url
   const res = await axios.get(query)
   return res.data.result
-}
-
-const queryHistBalance = async (acct, height) => {
-  /*
-  if (USE_DATABASE) {
-    const balance = await queryCosmos("/microtick/account/" + acct, height)
-    return parseFloat(balance.dai)
-  } else {
-    return 0
-  }
-  */
-  return 0
 }
 
 // API query caching
@@ -260,8 +250,6 @@ const handleNewBlock = async obj => {
     console.log("Setting chain ID=" + chainid)
   }
   if (USE_DATABASE) {
-    if (syncing) return
-    
     if (!db.inited) {
       syncing = true
       await db.init(config.mongo, chainid, chainHeight)
@@ -325,7 +313,6 @@ const processBlock = async (height) => {
       const txb64 = txs[i]
       var hash = crypto.createHash('sha256').update(Buffer.from(txb64, 'base64')).digest('hex').toUpperCase()
       const txr = results.txs_results[i]
-      //console.log("txr=" + JSON.stringify(txr, null, 2))
       if (pending[hash] !== undefined) {
         if (txr.code !== 0) {
           if (LOG_TX) {
@@ -340,56 +327,77 @@ const processBlock = async (height) => {
         }
         delete pending[hash]
       }
-      //console.log(txb64)
-      //const txb = Buffer.from(txb64, 'base64')
-      //const rawtx = tx.Tx.deserializeBinary(txb).toObject()
-      //console.log("RAW TX=" + JSON.stringify(rawtx, null, 2))
-      //console.log(res64)
       if (txr.code === 0) {
         // Tx successful
         try {
           const txstruct = {
-            events: {}
+            events: {},
+            transfers: []
           }
           if (txr.data !== null) {
             txstruct.result = decodeResult(txr.data)
           }
           for (var j=0; j<txr.events.length; j++) {
             const event = txr.events[j]
-            for (var attr = 0; attr < event.attributes.length; attr++) {
-              const a = event.attributes[attr]
-              const key = Buffer.from(a.key, 'base64').toString()
-              if (a.value !== undefined) {
-                const value = Buffer.from(a.value, 'base64').toString()
-                if (Array.isArray(txstruct.events[key])) {
-                  if (!txstruct.events[key].includes(value)) txstruct.events[key].push(value)
-                } else if (txstruct.events[key] === undefined) {
-                  txstruct.events[key] = value
-                } else if (txstruct.events[key] !== value) {
-                  txstruct.events[key] = [ txstruct.events[key], value ]
+            if (event.type === "message") {
+              for (var attr = 0; attr < event.attributes.length; attr++) {
+                const a = event.attributes[attr]
+                const key = Buffer.from(a.key, 'base64').toString()
+                if (a.value !== undefined) {
+                  const value = Buffer.from(a.value, 'base64').toString()
+                  if (Array.isArray(txstruct.events[key])) {
+                    if (!txstruct.events[key].includes(value)) txstruct.events[key].push(value)
+                  } else if (txstruct.events[key] === undefined) {
+                    txstruct.events[key] = value
+                  } else if (txstruct.events[key] !== value) {
+                    txstruct.events[key] = [ txstruct.events[key], value ]
+                  }
                 }
               }
             }
+            if (event.type === "transfer") {
+              const transfer = {}
+              for (var attr = 0; attr < event.attributes.length; attr++) {
+                const a = event.attributes[attr]
+                const key = Buffer.from(a.key, 'base64').toString()
+                const value = Buffer.from(a.value, 'base64').toString()
+                transfer[key] = value
+              }
+              txstruct.transfers.push(transfer)
+            }
           }
+          
+          // Update account balances from any transfers
+          if (!syncing && LOG_TRANSFERS) {
+            console.log("Transfers:")
+            txstruct.transfers.map(transfer => {
+              console.log("  " + transfer.amount + " " + transfer.sender + " -> " + transfer.recipient)
+            })
+          }
+          if (USE_DATABASE) {
+            txstruct.transfers.map(async transfer => {
+              const amt = util.convertCoinString(transfer.amount)
+              const value = parseFloat(amt.amount)
+              await db.updateAccountBalance(transfer.sender, amt.denom, -1 * value)
+              await db.updateAccountBalance(transfer.recipient, amt.denom, value)
+            })
+          }
+          
           //console.log("Result " + txstruct.module + " / " + txstruct.action + ": hash=" + shortHash(hash))
           if (txstruct.events.module === "microtick") {
             await processMicrotickTx(block, txstruct)
           } 
           if (txstruct.events.module === "bank" && txstruct.events.action === "send") {
             const baseTx = decodeTx.Tx.deserialize(Buffer.from(txb64, "base64"))
-            const sendTx = baseTx.body.messagesList.reduce((acc, msg) => {
-              if (msg.typeUrl === "/cosmos.bank.v1beta1.MsgSend") {
-                return decodeTx.Send.bufferToObject(msg.value)
-              }
-            }, null)
             const from = txstruct.events.sender
             const to = txstruct.events.recipient
+            const amt = parseFloat(txstruct.events.amount) / 1000000.0
             const depositPayload = {
               type: "deposit",
               from: from,
               account: to,
               height: block.height,
-              amount: parseFloat(txstruct.events.amount) / 1000000.0,
+              amount: amt,
               time: block.time,
               memo: baseTx.memo,
               hash: hash
@@ -399,25 +407,19 @@ const processBlock = async (height) => {
               account: from,
               to: to,
               height: block.height,
-              amount: parseFloat(txstruct.events.amount) / 1000000.0,
+              amount: amt,
               time: block.time,
               memo: baseTx.memo,
               hash: hash
             }
-            try {
-              if (PRUNING_OFF) {
-                withdrawPayload.balance = await queryHistBalance(from, block.height)
-                depositPayload.balance = await queryHistBalance(to, block.height)
-              }
-            } catch (err) {
-              console.error("Unable to get historical balances for MsgSend: " + err)
-            }
-            sendAccountEvent(txstruct.events.recipient, "deposit", depositPayload)
-            sendAccountEvent(txstruct.events.sender, "withdraw", withdrawPayload)
             if (USE_DATABASE) {
               await db.insertAccountEvent(block.height, txstruct.events.recipient, "deposit", depositPayload)
               await db.insertAccountEvent(block.height, txstruct.events.sender, "withdraw", withdrawPayload)
+              withdrawPayload.balance = await db.getAccountBalance(from, "udai")
+              depositPayload.balance = await db.getAccountBalance(to, "udai")
             }
+            sendAccountEvent(txstruct.events.recipient, "deposit", depositPayload)
+            sendAccountEvent(txstruct.events.sender, "withdraw", withdrawPayload)
           }
         } catch (err) {
           console.log(err)
@@ -452,11 +454,8 @@ const processMicrotickTx = async (block, tx) => {
   Promise.all(Object.keys(tx.events).map(async e => {
     if (e.startsWith("acct.")) {
       const account = e.slice(5)
-      if (PRUNING_OFF) {
-        console.log("WARNING: queryHistBalance not working yet")
-        //tx.result.balance[account] = await queryHistBalance(account, block.height)
-      }
       if (USE_DATABASE) {
+        tx.result.balance[account] = await db.getAccountBalance(account, "udai")
         await db.insertAccountEvent(block.height, account, tx.events[e], tx.result)
       }
       if (Array.isArray(tx.events[e])) {
