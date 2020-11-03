@@ -233,7 +233,15 @@ module.exports = {
       }
     },
     "trade.start": (acct, rec) => {
-      const cost = rec.trade.cost.amount
+      const cost = rec.trade.legsList.reduce((acc, leg) => {
+        if (rec.trade.taker === leg.pb_long) {
+          return acc + leg.cost.amount
+        }
+        if (rec.trade.taker === leg.pb_short) {
+          return acc - leg.cost.amount
+        }
+        return acc
+      }, 0)
       const commission = rec.trade.commission.amount + rec.trade.settleIncentive.amount
       const obj = {
         event: "trade.start",
@@ -244,7 +252,6 @@ module.exports = {
         duration: rec.trade.duration,
         quantity: rec.trade.quantity,
         amount: cost,
-        premium: rec.trade.premium.amount,
         cost: cost,
         option: rec.trade.type,
         commission: commission,

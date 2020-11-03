@@ -397,8 +397,8 @@ const processBlock = async (height) => {
           } 
           if (txstruct.events.module === "bank" && txstruct.events.action === "send") {
             const baseTx = decodeTx.Tx.deserialize(Buffer.from(txb64, "base64"))
-            const from = txstruct.events.sender
-            const to = txstruct.events.recipient
+            const from = txstruct.transfers[0].sender
+            const to = txstruct.transfers[0].recipient
             const amt = parseFloat(txstruct.events.amount) / 1000000.0
             const depositPayload = {
               type: "deposit",
@@ -426,8 +426,8 @@ const processBlock = async (height) => {
               withdrawPayload.balance = await db.getAccountBalance(from, "udai")
               depositPayload.balance = await db.getAccountBalance(to, "udai")
             }
-            sendAccountEvent(txstruct.events.recipient, "deposit", depositPayload)
-            sendAccountEvent(txstruct.events.sender, "withdraw", withdrawPayload)
+            sendAccountEvent(to, "deposit", depositPayload)
+            sendAccountEvent(from, "withdraw", withdrawPayload)
           }
         } catch (err) {
           console.log(err)
