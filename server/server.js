@@ -459,7 +459,7 @@ const processMicrotickTx = async (block, tx) => {
       consensus: consensus
     })
   }
-  Promise.all(Object.keys(tx.events).map(async e => {
+  await Promise.all(Object.keys(tx.events).map(async e => {
     if (e.startsWith("acct.")) {
       const account = e.slice(5)
       if (USE_DATABASE) {
@@ -475,7 +475,7 @@ const processMicrotickTx = async (block, tx) => {
       }
     }
   }))
-  Promise.all(Object.keys(tx.events).map(async e => {
+  await Promise.all(Object.keys(tx.events).map(async e => {
     if (e.startsWith("quote.")) {
       const id = parseInt(e.slice(6), 10)
       if (USE_DATABASE) {
