@@ -1,0 +1,3 @@
+${MTZONE}/proto
+${MTZONE}/vendor/github.com/cosmos/cosmos-sdk/proto
+${MTZONE}/vendor/github.com/cosmos/cosmos-sdk/third_party/proto
