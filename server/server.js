@@ -4,17 +4,12 @@ const ws = require('ws')
 const axios = require('axios')
 const objecthash = require('object-hash')
 const crypto = require('crypto')
-const format = require('./format.js')
+const bech32 = require('bech32')
+const BN = require('bignumber.js')
 
 const protocol = require('../lib/protocol.js')
+const codec = require('../proto/index.js')
 const config = JSON.parse(fs.readFileSync('./config.json'))
-
-const GRPC = require ('../lib/grpc.js')
-const grpc = new GRPC("http://" + config.tendermint)
-
-const decodeTx = require('../lib/tx.js')
-const decodeResult = require('../lib/result.js')
-const util = require('../lib/util.js')
 
 // Set to true if you want blocks and events stored in mongo
 const USE_DATABASE = config.use_database 
@@ -39,30 +34,34 @@ process.on('unhandledRejection', error => {
   } else {
     console.log("promise rejection")
   }
-  //process.exit(-1)
+  process.exit(-1)
 })
-
-// Subscriptions (websocket)
-const tendermint = config.tendermint
 
 // Transactions
 const NEWBLOCK = "tm.event='NewBlock'"
 const TXTIMEOUT = config.timeout
 const pending = {}
 
-const globals = {}
+const globals = {
+  account_cache: {}
+}
 
-// REST calls to Tendermint and Cosmos through ABCI
+// ABCI calls to Tendermint and REST
 
 const queryTendermint = async url => {
-  const query = "http://" + tendermint + url
+  const query = "http://" + config.tendermint + url
+  const res = await axios.get(query)
+  return res.data.result
+}
+
+const queryRest = async url => {
+  const query = "http://" + config.rest + url
   const res = await axios.get(query)
   return res.data.result
 }
 
 // API query caching
 var cache = {}
-var txcounter = 0
 var curheight = 0
 
 const shortHash = hash => {
@@ -100,17 +99,16 @@ const ids = {}
 
 const connect = async () => {
     
-  const tmclient = new ws("ws://" + tendermint + "/websocket")
+  const tmclient = new ws("ws://" + config.tendermint + "/websocket")
   
   tmclient.on('open', async () => {
     console.log("Tendermint connected")
     
-    // query markets
+    // query genesis markets, durations
     const res = await queryTendermint("/genesis")
-    globals.markets = res.genesis.app_state.microtick.markets
-    globals.durations = res.genesis.app_state.microtick.durations
-    console.log("Markets = " + globals.markets.map(m => m.name))
-    console.log("Durations = " + globals.durations.map(d => d.name))
+    globals.genesis = res.genesis
+    console.log("Genesis Markets=" + globals.genesis.app_state.microtick.markets.map(m => m.name))
+    console.log("Genesis Durations=" + globals.genesis.app_state.microtick.durations.map(d => d.name))
     
     const req = {
       "jsonrpc": "2.0",
@@ -170,6 +168,28 @@ const dump_subscriptions = () => {
   }
 }
 
+const convertCoinString = (str, assert) => {
+  const arr = str.match(/^(\d+\.?\d*)([a-zA-Z]+|ibc\/[0-9A-F]+)$/)
+  if (arr === null) {
+    throw new Error("Invalid coin string: " + str)
+  }
+  if (assert !== undefined && assert !== arr[2]) {
+    throw new Error("Denom mismatch got: '" + arr[2] + "' expected '" + assert + "'")
+  }
+  return {
+    denom: arr[2],
+    amount: parseFloat(arr[1])
+  }
+}
+  
+const convertCoin = (coin, precision) => {
+  const amount = new BN(coin.amount)
+  return {
+    denom: coin.denom,
+    amount: amount.dividedBy(precision).toNumber()
+  }
+}
+
 // Connected API clients
 
 const subscribeMarket = (id, event) => {
@@ -208,10 +228,10 @@ const broadcastBlock = block => {
   })
 }
 
-const broadcastTick = (market, consensus) => {
+const broadcastTick = (market, payload) => {
   if (syncing) return
   if (marketSubscriptions[market] === undefined) return
-  const msg = apiProtocol.createEvent('tick', market, consensus)
+  const msg = apiProtocol.createEvent('tick', market, payload)
   //console.log("marketSubscriptions:[" + event + "] " + marketSubscriptions[event])
   marketSubscriptions[market].map(id => {
     const client = clients[id]
@@ -224,9 +244,7 @@ const broadcastTick = (market, consensus) => {
 
 const sendAccountEvent = (acct, event, payload) => {
   if (syncing) return
-  if (format.fullTx[event] === undefined) return
-  const formatted = format.fullTx[event](payload)
-  const msg = apiProtocol.createEvent('account', event, formatted)
+  const msg = apiProtocol.createEvent('account', event, payload)
   if (ids[acct] !== undefined) {
     ids[acct].map(id => {
       const client = clients[id]
@@ -238,6 +256,73 @@ const sendAccountEvent = (acct, event, payload) => {
   }
 }
 
+const queryAuthAccount  = async acct => {
+  const query = codec.create("cosmos.auth.v1beta1.QueryAccountRequest", { address: acct })
+  const data = {
+    jsonrpc: "2.0",
+    id: 0,
+    method: "abci_query",
+    params: {
+      data: query.toString('hex'),
+      height: "0",
+      path: "/cosmos.auth.v1beta1.Query/Account",
+      prove: false
+    }
+  }
+  const res = await axios.post("http://" + config.tendermint, data)
+  if (res.data.result.response.code !== 0) {
+    throw new Error(res.data.result.response.log)
+  }
+  const buf = Buffer.from(res.data.result.response.value, 'base64')
+  return codec.decode("cosmos.auth.v1beta1.QueryAccountResponse", buf, true)
+}
+
+const updateAccountBalance = async (height, hash, acct, denom, amount) => {
+  if (globals.account_cache[acct] === undefined) {
+    let res = await queryAuthAccount(acct)
+    if (res.account["@type"] === "/cosmos.auth.v1beta1.ModuleAccount") {
+      globals.account_cache[acct] = {
+        name: res.account.name,
+        module: true
+      }
+    } else {
+      globals.account_cache[acct] = {
+        name: res.account.address,
+        module: false
+      }
+    }
+  }
+  if (USE_DATABASE) {
+    if (hash.startsWith("lookup")) {
+      const value = hash.split(":")
+      const lookup = value[1]
+      if (globals.account_cache[lookup] === undefined) {
+        let res = await queryAuthAccount(acct)
+        if (res.account["@type"] === "/cosmos.auth.v1beta1.ModuleAccount") {
+          globals.account_cache[acct] = {
+            name: res.account.name,
+            module: true
+          }
+          hash = res.account.name
+        } else {
+          hash = "blocktx"
+        }
+      } else {
+        hash = globals.account_cache[lookup].name
+      }
+    }
+    db.updateAccountBalance(height, hash, globals.account_cache[acct].name, denom, amount, 
+      !globals.account_cache[acct].module)
+  }
+  if (!globals.account_cache[acct].module) {
+    sendAccountEvent(globals.account_cache[acct].name, amount > 0 ? "deposit": "withdraw", {
+      hash: hash,
+      amount: amount >= 0 ? amount : -1 * amount,
+      denom: denom
+    })
+  }
+}
+
 var txlog
 const handleNewBlock = async obj => {
   if (processing) return
@@ -245,9 +330,7 @@ const handleNewBlock = async obj => {
 
   processing = true
 
-  if (LOG_TRANSFERS) {
-    txlog = "Transfers:"
-  }
+  txlog = "Transfers:"
   
   chainHeight = parseInt(obj.result.data.value.block.header.height, 10)
   if (chainid === null) {
@@ -264,8 +347,6 @@ const handleNewBlock = async obj => {
     const dbHeight = await db.height()
     if (dbHeight < chainHeight - 1) {
       syncing = true
-      //console.log("dbHeight=" + dbHeight)
-      //console.log("chainHeight=" + chainHeight)
       console.log("Syncing...")
       for (var i=dbHeight + 1; i < chainHeight; i++) {
         await processBlock(i)
@@ -274,7 +355,8 @@ const handleNewBlock = async obj => {
       syncing = false
     }
   }
-    
+  
+  // Reset cache for every new block
   cache = {
     accounts: {}
   }
@@ -293,6 +375,19 @@ const handleNewBlock = async obj => {
 }
 
 const processBlock = async (height) => {
+  
+  // handle genesis markets and accounts -> DB
+  if (USE_DATABASE && height === 1) {
+    globals.genesis.app_state.microtick.markets.map(async m => {
+      await db.insertMarket(m)
+    })
+    globals.genesis.app_state.bank.balances.map(a => {
+      a.coins.map(async c => {
+        await updateAccountBalance(height, "genesis", a.address, c.denom, parseFloat(c.amount))
+      })
+    })
+  }
+      
   curheight = height
   //console.log(JSON.stringify(obj, null, 2))
   const block = await queryTendermint('/block?height=' + height)
@@ -308,13 +403,7 @@ const processBlock = async (height) => {
   if (!syncing) {
     dump_subscriptions()
   }
-  if (!syncing) console.log("Events:")
-  broadcastBlock({
-    height: block.height,
-    time: block.time,
-    hash: block.block.header.last_block_id.hash,
-    chainid: chainid
-  })
+  
   if (num_txs > 0) {
     const txs = block.block.data.txs
     for (var i=0; i<txs.length; i++) {
@@ -336,15 +425,20 @@ const processBlock = async (height) => {
         }
         delete pending[hash]
       }
-      if (txr.code === 0) {
-        // Tx successful
+      if (txr.code === 0) { // Tx successful
         try {
           const txstruct = {
+            height: block.height,
+            hash: hash,
             events: {},
             transfers: []
           }
+          txstruct.tx = codec.decode("cosmos.tx.v1beta1.Tx", Buffer.from(txb64, 'base64'))
           if (txr.data !== null) {
-            txstruct.result = decodeResult(txr.data)
+            txstruct.result = codec.decode("cosmos.base.abci.v1beta1.TxMsgData", Buffer.from(txr.data, 'base64'))
+          }
+          if (USE_DATABASE) {
+            await db.insertTx(hash, block.height, txstruct.tx.body.messages.map(m => m.type_url))
           }
           for (var j=0; j<txr.events.length; j++) {
             const event = txr.events[j]
@@ -376,141 +470,385 @@ const processBlock = async (height) => {
             }
           }
           
+          //console.log(JSON.stringify(txstruct, null, 2))
+          //console.log(JSON.stringify(txr, null, 2))
+          
           // Update account balances from any transfers
-          if (!syncing && LOG_TRANSFERS) {
-            txstruct.transfers.map(transfer => {
+          txstruct.transfers.map(async transfer => {
+            if (!syncing && LOG_TRANSFERS) {
               txlog += "\n  " + transfer.amount + " " + transfer.sender + " -> " + transfer.recipient
-            })
-          }
-          if (USE_DATABASE) {
-            txstruct.transfers.map(async transfer => {
-              const amt = util.convertCoinString(transfer.amount)
-              const value = parseFloat(amt.amount)
-              await db.updateAccountBalance(transfer.sender, amt.denom, -1 * value)
-              await db.updateAccountBalance(transfer.recipient, amt.denom, value)
-            })
-          }
+            }
+            if (USE_DATABASE) {
+              transfer.amount.split(",").map(async amt => {
+                const coin = convertCoinString(amt)
+                await updateAccountBalance(height, hash, transfer.sender, coin.denom, -1 * coin.amount)
+                await updateAccountBalance(height, hash, transfer.recipient, coin.denom, coin.amount)
+              })
+            }
+          })
           
           //console.log("Result " + txstruct.module + " / " + txstruct.action + ": hash=" + shortHash(hash))
           if (txstruct.events.module === "microtick") {
             await processMicrotickTx(block, txstruct)
           } 
-          if (txstruct.events.module === "bank" && txstruct.events.action === "send") {
-            const baseTx = decodeTx.Tx.deserialize(Buffer.from(txb64, "base64"))
-            const from = txstruct.transfers[0].sender
-            const to = txstruct.transfers[0].recipient
-            const amt = parseFloat(txstruct.events.amount) / 1000000.0
-            const depositPayload = {
-              type: "deposit",
-              from: from,
-              account: to,
-              height: block.height,
-              amount: amt,
-              time: block.time,
-              memo: baseTx.memo,
-              hash: hash
-            }
-            const withdrawPayload = {
-              type: "withdraw",
-              account: from,
-              to: to,
-              height: block.height,
-              amount: amt,
-              time: block.time,
-              memo: baseTx.memo,
-              hash: hash
-            }
-            if (USE_DATABASE) {
-              await db.insertAccountEvent(block.height, txstruct.events.recipient, "deposit", depositPayload)
-              await db.insertAccountEvent(block.height, txstruct.events.sender, "withdraw", withdrawPayload)
-              withdrawPayload.balance = await db.getAccountBalance(from, "udai")
-              depositPayload.balance = await db.getAccountBalance(to, "udai")
-            }
-            sendAccountEvent(to, "deposit", depositPayload)
-            sendAccountEvent(from, "withdraw", withdrawPayload)
+          if (txstruct.events.module === "governance") {
+            txstruct.tx.body.messages.map(msg => {
+              switch (msg.type_url) {
+                case "/cosmos.gov.v1beta1.MsgSubmitProposal":
+                  const proposal = codec.decode(msg.type_url.slice(1), Buffer.from(msg.value, 'base64'), true)
+                  switch (proposal.content["@type"]) {
+                    case '/microtick.msg.DenomChangeProposal':
+                      console.log("Denom change: " + proposal.content.extDenom + " ratio: " + proposal.content.extPerInt)
+                      break
+                    case '/microtick.msg.AddMarketsProposal':
+                      proposal.content.markets.map(async m => {
+                        console.log("Add market: " + m.name)
+                        if (USE_DATABASE) {
+                          await db.insertMarket(m.name, m.description)
+                        }
+                      })
+                      break
+                  }
+                  break
+              }
+            })
+          }
+          if (txstruct.events.module === "ibc") {
+            console.log(JSON.stringify(txstruct.tx.body.messagesList, null, 2))
           }
         } catch (err) {
           console.log(err)
           console.log("UNKNOWN TX TYPE")
-          //process.exit()
+          process.exit()
         }
       }
     }
   }
+  
+  // Handle block transfers
+  const transfer_handler = async e => {
+    //console.log("  "  + e.type)
+    if (e.type === "transfer") {
+      const obj = {}
+      e.attributes.map(a => {
+        const key = Buffer.from(a.key, 'base64').toString()
+        const value = Buffer.from(a.value, 'base64').toString()
+        obj[key] = value
+      })
+      if (USE_DATABASE) {
+        obj.amount.split(",").map(async amt => {
+          const coin = convertCoinString(amt)
+          await updateAccountBalance(height, "lookup:" + obj.recipient, obj.sender, coin.denom, -1 * coin.amount)
+          await updateAccountBalance(height, "lookup:" + obj.sender, obj.recipient, coin.denom, coin.amount)
+        })
+      }
+      // Do not log block transfers
+      //if (!syncing && LOG_TRANSFERS) {
+        //txlog += "\n  " + obj.amount + " " + obj.sender + " -> " + obj.recipient
+      //}
+    }
+  }
+  for (i=0; i<results.begin_block_events.length; i++) {
+    transfer_handler(results.begin_block_events[i])
+  }
+  for (i=0; i<results.end_block_events.length; i++) {
+    transfer_handler(results.end_block_events[i])
+  }
+  
+  if (!syncing) {
+    console.log("Events:")
+    broadcastBlock({
+      height: block.height,
+      time: block.time,
+      hash: block.block.header.last_block_id.hash,
+      chainid: chainid
+    })
+  }
+  
   if (USE_DATABASE) {
     await db.insertBlock(block.height, block.time)
   }
 }
 
-const processMicrotickTx = async (block, tx) => {
+const convertTradeResultToObj = trade => {
+  const obj = {}
+  obj.id = trade.id
+  obj.quantity = convertCoin(trade.quantity, "1e18").amount
+  obj.start = trade.start
+  obj.expiration = trade.expiration
+  obj.strike = convertCoin(trade.strike, "1e18").amount
+  obj.commission = convertCoin(trade.commission, "1e18").amount
+  obj.settleIncentive = convertCoin(trade.settleIncentive, "1e18").amount
+  obj.legs = trade.legsList.map(leg => {
+    return {
+      legId: leg.legId,
+      type: leg.type ? "call" : "put",
+      backing: convertCoin(leg.backing, "1e18").amount,
+      premium: convertCoin(leg.premium, "1e18").amount,
+      cost: convertCoin(leg.cost, "1e18").amount,
+      quantity: convertCoin(leg.quantity, "1e18").amount,
+      long: bech32.encode("micro", bech32.toWords(Buffer.from(leg.pb_long, "base64"))),
+      short: bech32.encode("micro", bech32.toWords(Buffer.from(leg.pb_short, "base64"))),
+      quoteId: leg.quoted.id,
+      remainBacking: convertCoin(leg.quoted.remainBacking, "1e18").amount,
+      final: leg.quoted.pb_final
+    }
+  })
+  return obj
+}
+
+const processMicrotickTx = async (block, txstruct) => {
+  const tx = txstruct.tx
   if (tx.result !== undefined) {
     tx.result.height = block.height
     tx.result.balance = {}
   }
-  if (tx.events['mtm.MarketTick'] !== undefined) {
-    const market = tx.events['mtm.MarketTick']
-    const consensus = parseFloat(tx.result.consensus.amount)
-    if (USE_DATABASE) {
-      await db.insertMarketTick(block.height, block.time, market, consensus)
+  
+  // Decode results according to message type
+  for (var i=0; i<tx.body.messages.length; i++) {
+    const message = tx.body.messages[i]
+    const payload = codec.decode(tx.body.messages[i].type_url.slice(1), 
+      Buffer.from(tx.body.messages[i].value, 'base64'), true)
+    const result = txstruct.result.data[i]
+    const item = {}
+    switch (message.type_url) {
+    case "/microtick.msg.TxCancelQuote":
+      var data = codec.decode("microtick.msg.CancelQuoteData", Buffer.from(result.data, 'base64'), true)
+      item.type = "cancel"
+      item.time = data.time
+      item.id = payload.id
+      item.hash = txstruct.hash
+      item.requester = bech32.encode("micro", bech32.toWords(Buffer.from(payload.requester, "base64")))
+      item.account = bech32.encode("micro", bech32.toWords(Buffer.from(data.account, "base64")))
+      item.market = data.market
+      item.duration = data.duration
+      item.consensus = convertCoin(data.consensus, "1e18").amount
+      item.refund = convertCoin(data.refund, "1e18").amount
+      item.slash = convertCoin(data.slash, "1e18").amount
+      item.commission = convertCoin(data.commission, "1e18").amount
+      break
+    case "/microtick.msg.TxCreateQuote":
+      data = codec.decode("microtick.msg.CreateQuoteData", Buffer.from(result.data, 'base64'), true)
+      item.type = "create"
+      item.time = data.time
+      item.id = data.id
+      item.hash = txstruct.hash
+      item.provider = bech32.encode("micro", bech32.toWords(Buffer.from(payload.provider, "base64")))
+      item.market = payload.market
+      item.duration = payload.duration
+      item.backing = convertCoinString(payload.backing, "backing").amount
+      item.spot = convertCoinString(payload.spot, "spot").amount
+      item.ask = convertCoinString(payload.ask, "premium").amount
+      item.bid = convertCoinString(payload.bid, "premium").amount
+      item.consensus = convertCoin(data.consensus, "1e18").amount
+      item.commission = convertCoin(data.commission, "1e18").amount
+      item.reward = convertCoin(data.reward, "1e6").amount
+      break
+    case "/microtick.msg.TxDepositQuote":
+      data = codec.decode("microtick.msg.DepositQuoteData", Buffer.from(result.data, 'base64'), true)
+      item.type = "deposit"
+      item.time = data.time
+      item.id = payload.id
+      item.hash = txstruct.hash
+      item.requester = bech32.encode("micro", bech32.toWords(Buffer.from(payload.requester, "base64")))
+      item.market = data.market
+      item.duration = data.duration
+      item.deposit = convertCoinString(payload.deposit, "backing").amount
+      item.consensus = convertCoin(data.consensus, "1e18").amount
+      item.backing = convertCoin(data.backing, "1e18").amount
+      item.commission = convertCoin(data.commission, "1e18").amount
+      item.reward = convertCoin(data.reward, "1e6").amount
+      break
+    case "/microtick.msg.TxPickTrade":
+      data = codec.decode("microtick.msg.PickTradeData", Buffer.from(result.data, 'base64'), true)
+      item.type = "pick"
+      item.time = data.time
+      item.hash = txstruct.hash
+      item.taker = bech32.encode("micro", bech32.toWords(Buffer.from(payload.taker, "base64")))
+      item.order = payload.orderType
+      item.market = data.market
+      item.duration = data.duration
+      item.trade = convertTradeResultToObj(data.trade)
+      item.consensus = convertCoin(data.consensus, "1e18").amount
+      item.commission = convertCoin(data.commission, "1e18").amount
+      item.reward = convertCoin(data.reward, "1e6").amount
+      break
+    case "/microtick.msg.TxSettleTrade":
+      data = codec.decode("microtick.msg.SettleTradeData", Buffer.from(result.data, 'base64'), true)
+      item.type = "settle"
+      item.time = data.time
+      item.id = data.id
+      item.hash = txstruct.hash
+      item.settler = bech32.encode("micro", bech32.toWords(Buffer.from(data.settler, "base64")))
+      item.settleConsensus = convertCoin(data.pb_final, "1e18").amount
+      item.incentive = convertCoin(data.incentive, "1e18").amount
+      item.commission = convertCoin(data.commission, "1e18").amount
+      item.reward = convertCoin(data.reward, "1e6").amount
+      item.legs = data.legsList.map(leg => {
+        return {
+          legId: leg.legId,
+          settleAccount: bech32.encode("micro", bech32.toWords(Buffer.from(leg.settleAccount, "base64"))),
+          settle: convertCoin(leg.settle, "1e18").amount,
+          refundAccount: bech32.encode("micro", bech32.toWords(Buffer.from(leg.refundAccount, "base64"))),
+          refund: convertCoin(leg.refund, "1e18").amount
+        }
+      })
+      break
+    case "/microtick.msg.TxMarketTrade":
+      data = codec.decode("microtick.msg.MarketTradeData", Buffer.from(result.data, 'base64'), true)
+      item.type = "trade"
+      item.time = data.time
+      item.hash = txstruct.hash
+      item.taker = bech32.encode("micro", bech32.toWords(Buffer.from(payload.taker, "base64")))
+      item.order = payload.orderType
+      item.market = payload.market
+      item.duration = payload.duration
+      item.trade = convertTradeResultToObj(data.trade)
+      item.consensus = convertCoin(data.consensus, "1e18").amount
+      item.commission = convertCoin(data.commission, "1e18").amount
+      item.reward = convertCoin(data.reward, "1e6").amount
+      break
+    case "/microtick.msg.TxUpdateQuote":
+      data = codec.decode("microtick.msg.UpdateQuoteData", Buffer.from(result.data, 'base64'), true)
+      item.type = "update"
+      item.time = data.time
+      item.id = payload.id
+      item.hash = txstruct.hash
+      item.requester = bech32.encode("micro", bech32.toWords(Buffer.from(payload.requester, "base64")))
+      item.market = data.market
+      item.duration = data.duration
+      item.spot = convertCoinString(payload.newSpot, "spot").amount
+      item.ask = convertCoinString(payload.newAsk, "premium").amount
+      item.bid = convertCoinString(payload.newBid, "premium").amount
+      item.consensus = convertCoin(data.consensus, "1e18").amount
+      item.commission = convertCoin(data.commission, "1e18").amount
+      item.reward = convertCoin(data.reward, "1e6").amount
+      break
+    case "/microtick.msg.TxWithdrawQuote":
+      data = codec.decode("microtick.msg.WithdrawQuoteData", Buffer.from(result.data, 'base64'), true)
+      item.type = "withdraw"
+      item.time = data.time
+      item.id = payload.id
+      item.hash = txstruct.hash
+      item.requester = bech32.encode("micro", bech32.toWords(Buffer.from(payload.requester, "base64")))
+      item.market = data.market
+      item.duration = data.duration
+      item.withdraw = convertCoinString(payload.withdraw, "backing").amount
+      item.consensus = convertCoin(data.consensus, "1e18").amount
+      item.backing = convertCoin(data.backing, "1e18").amount
+      item.commission = convertCoin(data.commission, "1e18").amount
+      break
     }
-    broadcastTick(market, {
-      height: block.height,
-      time: block.time,
-      consensus: consensus
-    })
-  }
-  await Promise.all(Object.keys(tx.events).map(async e => {
-    if (e.startsWith("acct.")) {
-      const account = e.slice(5)
+    
+    //console.log(JSON.stringify(txstruct, null, 2))
+    console.log(JSON.stringify(item, null, 2))
+  
+    if (item.consensus !== undefined) {
+      // add tick
       if (USE_DATABASE) {
-        tx.result.balance[account] = await db.getAccountBalance(account, "udai")
-        await db.insertAccountEvent(block.height, account, tx.events[e], tx.result)
+        db.insertTick(txstruct.height, item.time, item.market, item.consensus)
       }
-      if (Array.isArray(tx.events[e])) {
-        tx.events[e].map(x => {
-          sendAccountEvent(account, x, tx.result)
+      broadcastTick(item.market, {
+        height: txstruct.height,
+        time: item.time,
+        consensus: item.consensus
+      })
+    }
+    
+    if (item.type === "create") {
+      if (USE_DATABASE) {
+        db.insertQuote(txstruct.height, item.id, item.hash, item.provider, item.market, item.duration,
+          item.spot, item.backing, item.ask, item.bid)
+      }
+      sendAccountEvent(item.provider, "create", {
+        hash: item.hash,
+        quote: item.id
+      })
+    }
+    
+    if (item.type === "trade" || item.type === "pick") {
+      item.trade.legs.map(leg => {
+        if (USE_DATABASE) {
+          db.insertTrade(txstruct.height, item.trade.id, leg.legId, item.hash, item.market, item.duration,
+            leg.type, item.trade.strike, item.trade.start, item.trade.expiration, leg.premium, leg.backing, 
+            leg.quantity, leg.long, leg.short)
+          if (leg.final) {
+            db.removeQuote(leg.quoteId)
+          } else {
+            db.updateQuoteBacking(leg.quoteId, item.hash, leg.remainBacking)
+          }
+        }
+        sendAccountEvent(item.taker, "taker", {
+          hash: item.hash,
+          trade: item.trade.id,
+          leg: leg.legId
         })
-      } else {
-        sendAccountEvent(account, tx.events[e], tx.result)
-      }
-    }
-  }))
-  await Promise.all(Object.keys(tx.events).map(async e => {
-    if (e.startsWith("quote.")) {
-      const id = parseInt(e.slice(6), 10)
-      if (USE_DATABASE) {
-        await db.insertQuoteEvent(block.height, id, tx.events[e], tx.result)
-      }
-    }
-    if (e.startsWith("trade.")) {
-      const id = parseInt(e.slice(6), 10)
-      const type = tx.events[e]
-      if (USE_DATABASE) {
-        await db.insertTradeEvent(block.height, id, type, tx.result)
-        if (type === "event.create") {
-          const trade = tx.result.trade
-          const start = Math.floor(Date.parse(trade.start) / 1000)
-          const end = Math.floor(Date.parse(trade.expiration) / 1000)
-          for (var i=0; i<trade.legsList.length; i++) {
-            const leg = trade.legsList[i]
-            await db.insertAction(id, "long", leg.lonr, start, end, 0, parseFloat(leg.premium.amount))
-            await db.insertAction(id, "short", leg.short, start, end, 0, parseFloat(leg.premium.amount))
-          }
+        if (leg.long === item.taker) {
+          sendAccountEvent(leg.short, "maker", {
+            hash: item.hash,
+            trade: item.trade.id,
+            leg: leg.legId,
+            quote: leg.quoteId
+          })
+        } else {
+          sendAccountEvent(leg.long, "maker", {
+            hash: item.hash,
+            trade: item.trade.id,
+            leg: leg.legId,
+            quote: leg.quoteId
+          })
         }
-        if (type === "event.settle") {
-          const trade = tx.result
-          for (var i=0; i<trade.settlementsList.length; i++) {
-            const s = trade.settlementsList[i]
-            const amt = parseFloat(s.settle.amount)
-            if (amt > 0) {
-              await db.updateAction(id, s.long, 0, amt) 
-              await db.updateAction(id, s.short, amt, 0)
-            }
-          }
-        }
-      }
+      })
     }
-  }))
+    
+    if (item.type === "settle") {
+      item.legs.map(leg => {
+        if (USE_DATABASE) {
+          db.settleTrade(item.id, leg.legId, item.settleConsensus, leg.settle, leg.refund)
+        }
+        sendAccountEvent(leg.settleAccount, "settle", {
+          hash: item.hash,
+          trade: item.id,
+          leg: leg.legId
+        })
+        sendAccountEvent(leg.refundAccount, "refund", {
+          hash: item.hash,
+          trade: item.id,
+          leg: leg.legId
+        })
+      })
+    }
+    
+    if (item.type === "update") {
+      if (USE_DATABASE) {
+        db.updateQuoteParams(item.id, item.hash, item.spot, item.ask, item.bid)
+      }
+      sendAccountEvent(item.requester, "update", {
+        hash: item.hash,
+        quote: item.id
+      })
+    }
+    
+    if (item.type === "deposit" || item.type === "withdraw") {
+      if (USE_DATABASE) {
+        db.updateQuoteBacking(item.id, item.hash, item.backing)
+      }
+      sendAccountEvent(item.requester, "update", {
+        hash: item.hash,
+        quote: item.id
+      })
+    }
+    
+    if (item.type === "cancel") {
+      if (USE_DATABASE) {
+        db.removeQuote(item.id)
+      }
+      sendAccountEvent(item.account, "cancel", {
+        hash: item.hash,
+        id: item.id
+      })
+    }
+  }
 }
 
 // API Server Listener
@@ -607,13 +945,17 @@ localServer.on('connection', async client => {
         delete ids[env.acct]
       }
     }
-    Object.keys(marketSubscriptions).map(key => {
+    const subkeys = Object.keys(marketSubscriptions)
+    for (var i=0; i<subkeys.length; i++) {
+      const key = subkeys[i]
       marketSubscriptions[key] = marketSubscriptions[key].reduce((acc, subid) => {
-        if (subid != id) acc.push(subid)
+        if (subid !== id) acc.push(subid)
         return acc
       }, [])
-    })
-    //const acct = env.acct
+      if (marketSubscriptions[key].length === 0) {
+        delete marketSubscriptions[key]
+      }
+    }
   })
   
 })
@@ -643,6 +985,7 @@ const handleMessage = async (env, name, payload) => {
     switch (name) {
       case 'connect':
         env.acct = payload.acct
+        //res = await queryTendermint('/abci_query?path="custom/microtick/params"')
         console.log("Incoming connection [" + env.id + "] account=" + env.acct)
         if (ids[env.acct] === undefined) {
           ids[env.acct] = []
@@ -650,8 +993,6 @@ const handleMessage = async (env, name, payload) => {
         ids[env.acct].push(env.id)
         return {
           status: true,
-          markets: globals.markets,
-          durations: globals.durations
         }
       case 'subscribe':
         subscribeMarket(env.id, payload.key)
@@ -663,139 +1004,150 @@ const handleMessage = async (env, name, payload) => {
         return {
           status: true
         }
-      case 'blockinfo':
-        res = await queryTendermint('/status')
+        
+      // Queries
+      case 'getparams':
+        res = await queryRest("/microtick/params")
         returnObj = {
           status: true,
-          chainid: chainid,
-          block: parseInt(res.sync_info.latest_block_height, 10),
-          timestamp: Math.floor(new Date(res.sync_info.latest_block_time).getTime() / 1000)
+          info: {
+            commissionQuotePercent: parseFloat(res.commission_quote_percent),
+            commissionTradeFixed: parseFloat(res.commission_trade_fixed),
+            commissionUpdatePercent: parseFloat(res.commission_update_percent),
+            commissionSettleFixed: parseFloat(res.commission_settle_fixed),
+            commissionCancelPercent: parseFloat(res.commission_cancel_percent),
+            settleIncentive: parseFloat(res.settle_incentive),
+            mintRatio: parseFloat(res.mint_ratio),
+            backingDenom: res.backing_denom
+          }
         }
         break
       case 'getacctinfo':
-        var res = await grpc.queryAccount(payload.acct)
+        const acct = payload.acct === undefined ? env.acct : payload.acct
+        res = await queryRest("/microtick/account/" + acct)
         returnObj = {
           status: true,
           info: {
             account: res.account,
-            balance: res.balancesList.dai,
-            stake: res.balancesList.tick,
-            placedquotes: res.placedQuotes,
-            placedtrades: res.placedTrades,
-            activeQuotes: res.activeQuotesList,
-            activeTrades: res.activeTradesList,
-            quoteBacking: res.quoteBacking.amount,
-            tradeBacking: res.tradeBacking.amount,
-            settleBacking: res.settleBacking.amount
+            balances: res.balances.reduce((acc, bal) => {
+              acc[bal.denom] = parseFloat(bal.amount)
+              return acc
+            }, {}),
+            placedQuotes: res.placed_quotes,
+            placedTrades: res.placed_trades,
+            activeQuotes: res.active_quotes,
+            activeTrades: res.active_trades,
+            quoteBacking: parseFloat(res.quote_backing.amount),
+            tradeBacking: parseFloat(res.trade_backing.amount),
+            settleBacking: parseFloat(res.settle_backing.amount)
           }
         }
         break
       case 'getmarketinfo':
-        res = await grpc.queryMarket(payload.market)
-        if (res.orderBooks === null) res.orderBooks = []
+        res = await queryRest("/microtick/market/" + payload.market)
+        if (res.order_books === null) res.order_books = []
         returnObj = {
           status: true,
           info: {
             market: res.market,
-            consensus: res.consensus.amount,
-            totalBacking: res.totalBacking.amount,
-            totalWeight: res.totalWeight.amount,
-            orderBooks: res.orderBooksList.map(ob => {
+            description: res.description,
+            consensus: parseFloat(res.consensus.amount),
+            totalBacking: parseFloat(res.total_backing.amount),
+            totalWeight: parseFloat(res.total_weight.amount),
+            orderBooks: res.order_books.map(ob => {
               return {
                 name: ob.name,
-                sumBacking: ob.sumBacking.amount,
-                sumWeight: ob.sumWeight.amount,
-                insideAsk: ob.insideAsk.amount,
-                insideBid: ob.insideBid.amount,
-                insideCallAsk: ob.insideCallAsk.amount,
-                insideCallBid: ob.insideCallBid.amount,
-                insidePutAsk: ob.insidePutAsk.amount,
-                insidePutBid: ob.insidePutBid.amount
+                sumBacking: parseFloat(ob.sum_backing.amount),
+                sumWeight: parseFloat(ob.sum_weight.amount),
+                insideAsk: parseFloat(ob.inside_ask.amount),
+                insideBid: parseFloat(ob.inside_bid.amount),
+                insideCallAsk: parseFloat(ob.inside_call_ask.amount),
+                insideCallBid: parseFloat(ob.inside_call_bid.amount),
+                insidePutAsk: parseFloat(ob.inside_put_ask.amount),
+                insidePutBid: parseFloat(ob.inside_put_bid.amount)
               }
             })
           }
         }
         break
       case 'getmarketspot':
-        res = await grpc.queryConsensus(payload.market)
+        res = await queryRest("/microtick/consensus/" + payload.market)
         returnObj = {
           status: true,
           info: {
             market: res.market,
-            consensus: res.consensus.amount,
-            sumbacking: res.totalBacking.amount,
-            sumweight: res.totalWeight.amount
+            consensus: parseFloat(res.consensus.amount),
+            sumBacking: parseFloat(res.total_backing.amount),
+            sumWeight: parseFloat(res.total_weight.amount)
           }
         }
         break
       case 'getorderbookinfo':
-        res = await grpc.queryOrderBook(payload.market, payload.duration)
+        res = await queryRest("/microtick/orderbook/" + payload.market + "/" + payload.duration)
         const quoteListParser = q => {
           return {
             id: q.id,
-            premium: q.premium.amount,
-            quantity: q.quantity.amount
+            premium: parseFloat(q.premium.amount),
+            quantity: parseFloat(q.quantity.amount)
           }
         }
         returnObj = {
           status: true,
           info: {
-            sumBacking: res.sumBacking.amount,
-            sumWeight: res.sumWeight.amount,
-            callAsks: res.callAsksList.map(quoteListParser),
-            putAsks: res.putAsksList.map(quoteListParser),
-            callBids: res.callBidsList.map(quoteListParser),
-            putBids: res.putBidsList.map(quoteListParser)
+            sumBacking: parseFloat(res.sum_backing.amount),
+            sumWeight: parseFloat(res.sum_weight.amount),
+            callAsks: res.call_asks.map(quoteListParser),
+            putAsks: res.put_asks.map(quoteListParser),
+            callBids: res.call_bids.map(quoteListParser),
+            putBids: res.put_bids.map(quoteListParser)
           }
         }
         break
       case 'getsyntheticinfo':
-        res = await grpc.querySynthetic(payload.market, payload.duration)
+        res = await queryRest("/microtick/synthetic/" + payload.market + "/" + payload.duration)
         const synListParser = q => {
           return {
-            askId: q.askId,
-            bidId: q.bidId,
-            spot: q.spot.amount,
-            quantity: q.quantity.amount
+            spot: parseFloat(q.spot.amount),
+            quantity: parseFloat(q.quantity.amount)
           }
         }
         returnObj = {
           status: true,
           info: {
-            consensus: res.consensus.amount,
-            weight: res.weight.amount,
-            asks: res.asksList.map(synListParser),
-            bids: res.bidsList.map(synListParser),
+            consensus: parseFloat(res.consensus.amount),
+            sumBacking: parseFloat(res.sum_backing.amount),
+            sumWeight: parseFloat(res.sum_weight.amount),
+            asks: res.asks.map(synListParser),
+            bids: res.bids.map(synListParser),
           }
         }
         break
       case 'getlivequote':
-        res = await grpc.queryQuote(payload.id)
+        res = await queryRest("/microtick/quote/" + payload.id)
         returnObj = {
           status: true,
           info: {
             id: res.id,
+            provider: res.provider,
             market: res.market,
             duration: res.duration,
-            provider: res.provider,
-            backing: res.backing.amount,
-            ask: res.ask.amount,
-            bid: res.bid.amount,
-            quantity: res.quantity.amount,
-            consensus: res.consensus.amount,
-            spot: res.spot.amount,
-            delta: res.delta,
-            callAsk: res.callAsk.amount,
-            callBid: res.callBid.amount,
-            putAsk: res.putAsk.amount,
-            putBid: res.putBid.amount,
+            backing: parseFloat(res.backing.amount),
+            ask: parseFloat(res.ask.amount),
+            bid: parseFloat(res.bid.amount),
+            quantity: parseFloat(res.quantity.amount),
+            consensus: parseFloat(res.consensus.amount),
+            spot: parseFloat(res.spot.amount),
+            callAsk: parseFloat(res.call_ask.amount),
+            callBid: parseFloat(res.call_bid.amount),
+            putAsk: parseFloat(res.put_ask.amount),
+            putBid: parseFloat(res.put_bid.amount),
             modified: res.modified * 1000,
-            canModify: res.canModify * 1000
+            canModify: res.can_modify * 1000
           }
         }
         break
       case 'getlivetrade':
-        res = await grpc.queryTrade(payload.id)
+        res = await queryRest("/microtick/trade/" + payload.id)
         returnObj = {
           status: true,
           info: {
@@ -804,34 +1156,36 @@ const handleMessage = async (env, name, payload) => {
             duration: res.duration,
             order: res.order,
             taker: res.taker,
-            quantity: res.quantity.amount,
+            quantity: parseFloat(res.quantity.amount),
             start: res.start * 1000,
             expiration: res.expiration * 1000,
-            strike: res.strike.amount,
-            currentSpot: res.consensus.amount,
-            currentValue: res.currentValue,
-            commission: res.commission.amount,
-            settleIncentive: res.settleIncentive.amount,
-            legs: res.legsList.map(leg => {
+            strike: parseFloat(res.strike.amount),
+            currentSpot: parseFloat(res.consensus.amount),
+            currentValue: parseFloat(res.current_value),
+            commission: parseFloat(res.commission.amount),
+            settleIncentive: parseFloat(res.settle_incentive.amount),
+            legs: res.legs.map(leg => {
               return {
                 leg_id: leg.leg_id,
                 type: leg.type,
-                backing: leg.backing.amount,
-                premium: leg.premium.amount,
-                quantity: leg.quantity.amount,
-                cost: leg.cost.amount,
+                backing: parseFloat(leg.backing.amount),
+                premium: parseFloat(leg.premium.amount),
+                quantity: parseFloat(leg.quantity.amount),
+                cost: parseFloat(leg.cost.amount),
                 long: leg.long,
                 short: leg.short,
                 quoted: {
                   id: leg.quoted.id,
-                  premium: leg.quoted.premium.amount,
-                  spot: leg.quoted.spot.amount
+                  premium: parseFloat(leg.quoted.premium.amount),
+                  spot: parseFloat(leg.quoted.spot.amount)
                 }
               }
             })
           }
         }
         break
+        
+      /*
       case 'gethistquote':
         if (USE_DATABASE) {
           res = await db.queryHistQuote(payload.id, payload.startBlock, payload.endBlock)
@@ -904,15 +1258,19 @@ const handleMessage = async (env, name, payload) => {
         } else {
           throw new Error("Database turned off")
         }
+        */
+        
+      // Transactions
+      
       case 'getauthinfo':
         // get the account number, sequence number
-        res = await grpc.queryAuthAccount(payload.acct)
+        res = await queryAuthAccount(payload.acct)
         return {
           status: true,
           info: {
             chainid: chainid,
-            account: res.accountNumber,
-            sequence: res.sequence
+            account: res.account.accountNumber,
+            sequence: res.account.sequence !== undefined ? res.account.sequenct : 0
           }
         }
       case 'posttx':
@@ -923,11 +1281,34 @@ const handleMessage = async (env, name, payload) => {
             submit: async (acct) => {
               if (pendingTx.submitted) return
               try {
-                const txtype = payload.type
-                console.log("Posting [" + env.id + "] TX " + txtype)
-                
+                console.log("Posting [" + env.id + "] TX " + payload.type)
+                console.log(payload.tx)
                 pendingTx.submitted = true
-                const res = await axios.post('http://' + tendermint, {
+
+/*
+  const auth = await codec.query('/cosmos.auth.v1beta1.QueryAccountRequest', '/cosmos.auth.v1beta1.QueryAccountResponse', async raw => {
+    raw.setAddress(acct)
+    const data = {
+      jsonrpc: "2.0",
+      id: 0,
+      method: "abci_query",
+      params: {
+        data: Buffer.from(raw.serializeBinary()).toString('hex'),
+        height: "0",
+        path: "/cosmos.auth.v1beta1.Query/Account",
+        prove: false
+      }
+    }
+    const res = await axios.post("http://" + config.tendermint, data)
+    if (res.data.result.response.code !== 0) {
+      throw new Error(res.data.result.response.log)
+    }
+    return res.data.result.response.value
+  })
+  */
+  console.log(Buffer.from(payload.tx, 'base64').toString('hex'))
+                
+                const res = await axios.post('http://' + config.tendermint, {
                   jsonrpc: "2.0",
                   id: 1,
                   method: "broadcast_tx_commit",
@@ -939,11 +1320,12 @@ const handleMessage = async (env, name, payload) => {
                     "Content-Type": "text/json"
                   }
                 })
+                console.log(JSON.stringify(res.data, null, 2))
   
                 if (res.data.result.check_tx.code !== 0) {
                   // error
                   outerReject(new Error(res.data.result.check_tx.log))
-                  console.log("  failed: " + res.data.result.check_tx.log)
+                  console.log("  outer post failed: " + res.data.result.check_tx.log)
                   return
                 } else {
                   if (LOG_TX) console.log("  hash=" + shortHash(res.data.result.hash))
@@ -954,7 +1336,7 @@ const handleMessage = async (env, name, payload) => {
                       resolve(txres)
                     },
                     failure: err => {
-                      console.log("failure")
+                      console.log("  transaction failed: " + err)
                       reject(err)
                     },
                     timedout: false,
@@ -1002,20 +1384,19 @@ const handleMessage = async (env, name, payload) => {
         }
     }
     
-    // Save in cache
-    if (name !== "posttx") {
-      cache[hash] = returnObj
-    }
-    
+    // Save query in cache
+    cache[hash] = returnObj
     return returnObj
     
   } catch (err) {
     console.log("API error: " + name + ": " + err.message)
-    //console.log(err)
-    //if (err !== undefined) console.log(err)
+    if (config.development) {
+      console.log(err)
+    }
+    if (err !== undefined) console.log(err)
     return {
       status: false,
-      error: err.message
+      error: err.message === undefined ? "Request failed" : err.message
     }
   }
 }

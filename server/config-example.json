@@ -1,6 +1,8 @@
 {
     "tendermint": "localhost:26657",
+    "rest": "localhost:1317",
     "mongo": "mongodb://localhost:27017",
+    "development": false,
     "timeout": 30000,
     "host_ssl": false,
     "secureport": 9999,

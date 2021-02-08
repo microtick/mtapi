@@ -4,6 +4,13 @@
   "description": "",
   "main": "test.js",
   "dependencies": {
+    "@ledgerhq/hw-transport-node-hid": "^5.41.0",
+    "bech32": "^1.1.4",
+    "bip32": "^2.0.6",
+    "bip39": "^3.0.3",
+    "crypto-js": "^4.0.0",
+    "js-sha256": "^0.9.0",
+    "secp256k1": "^4.0.2"
   },
   "devDependencies": {},
   "scripts": {

@@ -37,15 +37,15 @@ const DB = {
   
   init: async (url, chainid, chainheight) => {
     if (this.inited) return
+    this.inited = true
     
     console.log("Initializing database module")
     
     this.url = url
     this.chainid = chainid
-    this.inited = true
     
     await mongo_reconnect(this.url)
-    db = mongo.db(this.chainid)
+    db = mongo.db("mtapi-v2-" + this.chainid)
     
     const maxHeight = await db.collection('blocks').findOne({},{sort:[['height',-1]]})
     if (maxHeight !== null) {
@@ -57,22 +57,17 @@ const DB = {
       }
     }
     
-    await db.createCollection('meta', { capped: true, max: 1, size: 4096 })
-    await db.createCollection('counters', { capped: true, max: 1, size: 4096 })
-    await db.createCollection('balances')
+    await db.createCollection('meta')
     await db.createCollection('blocks')
+    await db.createCollection('txs')
+    await db.createCollection('balances')
+    await db.createCollection('ledger')
+    await db.createCollection('markets')
     await db.createCollection('ticks')
-    await db.createCollection('account')
     await db.createCollection('quotes')
+    await db.createCollection('updates')
+    await db.createCollection('books')
     await db.createCollection('trades')
-    await db.createCollection('actions')
-    
-    const counters = await db.collection('counters')
-    if (await counters.find().count() === 0) {
-      await counters.insertOne({ 
-        ticks: 0
-      })
-    }
     
     const hasBlockIndex = await db.collection('blocks').indexExists('history')
     if (!hasBlockIndex) {
@@ -80,7 +75,8 @@ const DB = {
       await db.collection('blocks').createIndex({
         height: 1
       }, {
-        name: 'history'
+        name: 'history',
+        unique: true
       })
       await db.collection('blocks').createIndex({
         time: 1
@@ -89,11 +85,45 @@ const DB = {
       })
     }
     
+    const hasTxIndex = await db.collection('txs').indexExists('hash')
+    if (!hasTxIndex) {
+      console.log("Creating tx index")
+      await db.collection('txs').createIndex({
+        hash: 1,
+      }, {
+        name: 'hash',
+        unique: true,
+        sparse: true
+      })
+      await db.collection('txs').createIndex({
+        height: 1
+      }, {
+        name: 'height'
+      })
+    }
+    
+    const hasLedgerIndex = await db.collection('ledger').indexExists('sorted')
+    if (!hasLedgerIndex) {
+      console.log("Creating ledger index")
+      await db.collection('ledger').createIndex({
+        hash: 1
+      }, {
+        name: 'hashes',
+        sparse: true
+      })
+      await db.collection('ledger').createIndex({
+        height: 1,
+        account: 1
+      }, {
+        name: 'sorted',
+        sparse: true
+      })
+    }
+    
     const hasTickIndex = await db.collection('ticks').indexExists('history')
     if (!hasTickIndex) {
       console.log("Creating tick index")
       await db.collection('ticks').createIndex({
-        index: 1,
         height: 1,
         market: 1
       }, {
@@ -101,47 +131,46 @@ const DB = {
       })
     }
   
-    const hasAccountIndex = await db.collection('account').indexExists('history')
-    if (!hasAccountIndex) {
-      console.log("Creating account index")
-      await db.collection('account').createIndex({
-        account: 1,
-        height: 1
+    const hasBooksIndex = await db.collection('books').indexExists('active')
+    if (!hasBooksIndex) {
+      console.log("Creating books index")
+      await db.collection('books').createIndex({
+        id: 1,
+        market: 1,
+        duration: 1
+      }, {
+        name: 'active'
+      })
+    }
+  
+    const hasQuoteIndex = await db.collection('quotes').indexExists('history')
+    if (!hasQuoteIndex) {
+      console.log("Creating quotes index")
+      await db.collection('quotes').createIndex({
+        height: 1,
+        id: 1
       }, {
         name: 'history'
       })
     }
     
-    const hasQuoteIndex = await db.collection('quotes').indexExists('history')
-    if (!hasQuoteIndex) {
-      console.log("Creating quotes index")
-      await db.collection('quotes').createIndex({
-        id: 1,
-        height: 1
+    const hasUpdateIndex = await db.collection('updates').indexExists('id')
+    if (!hasUpdateIndex) {
+      console.log("Creating update index")
+      await db.collection('updates').createIndex({
+        height: 1,
+        id: 1
       }, {
-        name: 'history'
+        name: 'id'
       })
     }
-  
+    
     const hasTradeIndex = await db.collection('trades').indexExists('history')
     if (!hasTradeIndex) {
       console.log("Creating trades index")
       await db.collection('trades').createIndex({
         id: 1,
-        height: 1
-      }, {
-        name: 'history'
-      })
-    }
-    
-    const hasActionsIndex = await db.collection('actions').indexExists('history')
-    if (!hasActionsIndex) {
-      console.log("Creating actions index")
-      await db.collection('actions').createIndex({
-        id: 1,
-        account: 1,
-        start: 1,
-        end: 1
+        leg: 1
       }, {
         name: 'history'
       })
@@ -164,7 +193,7 @@ const DB = {
     if (do_mongo_reconnect) {
       do_mongo_reconnect = false
       await mongo_reconnect(this.url)
-      db = mongo.db(this.chainid)
+      db = mongo.db("mtapi-v2-" + this.chainid)
     }
     // HACK
     
@@ -177,106 +206,160 @@ const DB = {
       upsert: true
     })
     
-    await db.collection('meta').insertOne({
+    await db.collection('meta').replaceOne({
+      id: 1
+    }, {
+      id: 1,
       syncHeight: height,
       syncTime: time
+    }, {
+      upsert: true
     })
   },
   
-  insertMarketTick: async (height, time, market, consensus) => {
-    const counters = await db.collection('counters').find().next()
-    
-    const index = counters.ticks++
-    await db.collection('ticks').replaceOne({
-      index: index
+  insertTx: async (hash, height, messages) => {
+    await db.collection('txs').replaceOne({
+      hash: hash
     }, {
-      index: index,
+      hash: hash,
       height: height,
+      messages: messages
+    }, {
+      upsert: true
+    })
+  },
+  
+  insertMarket: async (market, description) => {
+    await db.collection('markets').replaceOne({
+      name: market
+    }, {
+      name: market,
+      description: description
+    }, {
+      upsert: true
+    })
+  },
+  
+  insertTick: async (height, time, market, consensus) => {
+    //should be replace one: only one tick per market per height
+    await db.collection('ticks').replaceOne({
+      height: height,
+    }, {
+      height: height,
+      time: time,
       market: market,
       consensus: consensus
     }, {
       upsert: true
     })
-    
-    await db.collection('counters').insertOne({
-      ticks: counters.ticks,
-      quotes: counters.quotes,
-      trades: counters.trades
-    })
   },
   
-  insertAccountEvent: async (height, acct, type, data) => {
-    await db.collection('account').insertOne({
-      height: height,
-      account: acct,
-      type: type,
-      data: data
-    })
-  },
-  
-  insertQuoteEvent: async (height, id, type, data) => {
+  insertQuote: async (height, id, hash, provider, market, duration, spot, backing, ask, bid) => {
     await db.collection('quotes').insertOne({
       height: height,
+      type: "create",
       id: id,
-      type: type,
-      data: data
+      provider: provider,
+      hash: hash,
+      active: true
+    })
+    await db.collection('books').insertOne({
+      id: id,
+      market: market,
+      duration: duration,
+      spot: spot,
+      backing: backing,
+      ask: ask,
+      bid: bid
     })
   },
   
-  insertTradeEvent: async (height, id, type, data) => {
+  updateQuoteBacking: async (height, id, hash, remainBacking) => {
+    await db.collection('books').updateOne({
+      id: id
+    }, {
+      $set: {
+        backing: remainBacking
+      }
+    })
+    await db.collection('updates').insertOne({
+      height: height,
+      id: id,
+      hash: hash,
+      backing: remainBacking
+    })
+  },
+  
+  updateQuoteParams: async (height, id, hash, newSpot, newAsk, newBid) => {
+    await db.collection('books').updateOne({
+      id: id
+    }, {
+      $set: {
+        spot: newSpot,
+        ask: newAsk,
+        bid: newBid
+      }
+    })
+    await db.collection('updates').insertOne({
+      height: height,
+      id: id,
+      hash: hash,
+      spot: newSpot,
+      ask: newAsk,
+      bid: newBid
+    })
+  },
+  
+  removeQuote: async id => {
+    await db.collection('books').deleteOne({ id: id })
+    await db.collection('quotes').updateOne({
+      id: id
+    }, {
+      $set: {
+        active: false
+      }
+    })
+  },
+  
+  insertTrade: async (height, id, legid, hash, market, duration, type, strike, start, expiration, premium, backing, quantity, 
+    long, short) => {
     await db.collection('trades').insertOne({
       height: height,
       id: id,
+      leg: legid,
+      hash: hash,
+      market: market,
+      duration: duration,
       type: type,
-      data: data
-    })
-  },
-  
-  insertAction: async (id, cp, account, start, end, debit, credit) => {
-    const obj = {
-      id: id, 
-      account: account,
-      position: cp,
+      strike: strike,
       start: start,
-      end: end,
-      debit: debit,
-      credit: credit
-    }
-    // handle duplicate short trade entries
-    const curs = await db.collection('actions').find({
-      id: id,
-      account: account
-    })
-    if (await curs.hasNext()) {
-      const rec = curs.next()
-      obj.debit += debit
-      obj.credit += credit
-    }
-    await db.collection('actions').updateOne({
-      id: id,
-      account: account
-    }, {
-      $set: obj
-    }, {
-      upsert: true
+      expiration: expiration,
+      premium: premium,
+      backing: backing,
+      quantity: quantity,
+      long: long,
+      short: short,
+      active: true
     })
   },
   
-  updateAction: async (id, account, debit, credit) => {
-    const obj = {}
-    if (debit !== 0) obj.debit = debit
-    if (credit !== 0) obj.credit = credit
-    await db.collection('actions').updateOne({
+  settleTrade: async (id, legid, settleConsensus, settleAmount, refundAmount) => {
+    await db.collection('trades').updateOne({
       id: id,
-      account: account
+      leg: legid
     }, {
-      $set: obj
+      $set: {
+        settle: settleConsensus,
+        payout: settleAmount,
+        refund: refundAmount,
+        active: false
+      }
     })
   },
   
-  updateAccountBalance: async (account, denom, delta) => {
+  updateAccountBalance: async (height, hash, account, denom, amount, add_ledger_entry) => {
     const inc = {}
-    inc [denom] = delta
+    inc["coins." + denom] = amount
     await db.collection('balances').updateOne({
       account: account
     }, {
@@ -284,6 +367,17 @@ const DB = {
     }, {
       upsert: true
     })
+    if (add_ledger_entry) {
+      const obj = {
+        height: height,
+        hash: hash, 
+        account: account,
+      }
+      if (amount < 0) obj.debit = -1 * amount
+      if (amount > 0) obj.credit = amount
+      obj.denom = denom
+      await db.collection('ledger').insertOne(obj)
+    }
   },
   
   getAccountBalance: async (account, denom) => {
@@ -292,13 +386,13 @@ const DB = {
     })
     if (curs.hasNext()) {
       const rec = await curs.next()
-      return rec[denom]
+      return rec.coins[denom]
     }
     return 0
   },
   
   queryAccountPerformance: async (account, start, end) => {
-    const curs = await db.collection('actions').aggregate([
+    const curs = await db.collection('ledger').aggregate([
       {
         $match: {
           $and: [
@@ -332,6 +426,11 @@ const DB = {
       credit: 0,
       count: 0,
     }
+  },
+  
+  queryMarkets: async () => {
+    const curs = await db.collection('markets').find()
+    return await curs.toArray()
   },
   
   queryMarketHistory: async (market, startblock, endblock, target) => {
@@ -393,7 +492,7 @@ const DB = {
     //console.log("account=" + acct)
     //console.log("startblock=" + startblock)
     //console.log("endblock=" + endblock)
-    const curs = await db.collection('account').aggregate([
+    const curs = await db.collection('ledger').aggregate([
       {
         $match: {
           $and: [
@@ -664,7 +763,7 @@ const DB = {
     ]
     var tickEnd = data.endBlock
     if (tickEnd === -1) { 
-      curs = await db.collection('meta').find()
+      curs = await db.collection('meta').find({ id: 1 })
       if (await curs.hasNext()) {
         const doc = await curs.next()
         tickEnd = doc.syncHeight

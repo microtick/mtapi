@@ -1,81 +1,26 @@
-const WebSocketClient = require('websocket').w3cwebsocket
+import websocket from 'websocket'
 
-const wallet = require('./wallet.js')
-const protocol = require('../lib/protocol.js')
-const codec = require('../lib/tx.js')
+import protocol from '../lib/protocol.js'
+import { SoftwareSigner, LedgerSigner } from './signers.js'
+import { TxFactory } from './transactions.js'
 
-var client
-const connectServer = (url, onOpen, onMessage) => {
-  
-  client = new WebSocketClient(url)
-  
-  client.onopen = () => {
-    console.log("Server connected")
-    if (onOpen !== undefined) {
-      onOpen(client)
-    }
-  }
-  
-  client.onmessage = msg => {
-    onMessage(msg.data)
-  }
-  
-  client.onclose = () => {
-    console.log("Server disconnected")
-    setTimeout(() => {
-      connectServer(url, onOpen, onMessage)
-    }, 1000)
-  }
-  
-  client.onerror = err => {
-    //console.log("Server error")
-  }
+export { MTAPI, SoftwareSigner, LedgerSigner }
+
+class MTAPI {
     
-}
-
-class API {
-    
-  constructor(url) {
-    this.url = url
+  constructor(signer) {
+    this.signer = signer
     
     this.subscriptions = {}
     this.blockHandlers = []
     this.tickHandlers = []
     this.accountHandlers = []
     
-    this.protocol = new protocol(240000, async (env, name, payload) => {
-      return await this.handleMessage(env, name, payload)
-    }, async (env, msg) => {
-      if (msg.type === 'block') {
-        delete this.auth
-        for (var i=0; i<this.blockHandlers.length; i++) {
-          const handler = this.blockHandlers[i] 
-          await handler(msg.payload)
-        }
-      } else if (msg.type === 'tick') {
-        //console.log("Event: " + name)
-        //console.log(JSON.stringify(payload, null, 2))
-        if (this.subscriptions[msg.name] === undefined) {
-          console.log("Warning: no subscription for tick: " + msg.name)
-        } else {
-          for (i=0; i<this.tickHandlers.length; i++) {
-            const handler = this.tickHandlers[i]
-            await handler(msg.name, msg.payload)
-          }
-        }
-      } else if (msg.type === 'account') {
-        for (i=0; i<this.accountHandlers.length; i++) {
-          const handler = this.accountHandlers[i]
-          await handler(msg.name, msg.payload)
-        }
-      }
-    }, str => {
-      try {
-        client.send(str)
-      } catch (err) {
-        console.log("Send: " + err.message)
-      }
-    })
+    // Set up protocol handlers
+    this.protocol = new protocol(240000, 
+      this._handleMessage.bind(this), 
+      this._handleEvent.bind(this), 
+      this._handleSend.bind(this))
     
     this.durationFromSeconds = seconds => {
       switch (seconds) {
@@ -107,7 +52,108 @@ class API {
         case "1day": return 86400
       }
     }
+    
+  }
   
+  async init(url) {
+    console.log("Initializing API")
+
+    await new Promise((res, rej) => {
+      try {
+        this._connectServer(url, async () => {
+          console.log("Wallet address: " + this.signer.address)
+          const response = await this.protocol.newMessage('connect', {
+            acct: this.signer.address
+          })
+          if (!response.status) {
+            throw new Error("Connect: " + response.error)
+          }
+          Object.keys(this.subscriptions).map(async key => {
+            if (this.subscriptions[key] > 0) {
+              this.subscriptions[key]--
+              console.log("Resubscribing: " + key)
+              await this.subscribe(key)
+            }
+          })
+          res()
+        }, async msg => {
+          const response = await this.protocol.process(null, msg)
+          if (response !== undefined) {
+            this.client.send(response)
+          }
+        })
+      } catch (err) {
+        rej(err)
+      }
+    })
+  }
+  
+  _connectServer(url, onOpen, onMessage) {
+    const WebSocketClient = websocket.w3cwebsocket
+    this.client = new WebSocketClient(url)
+    
+    this.client.onopen = () => {
+      console.log("Server connected")
+      if (onOpen !== undefined) {
+        onOpen()
+      }
+    }
+    
+    this.client.onmessage = msg => {
+      onMessage(msg.data)
+    }
+    
+    this.client.onclose = () => {
+      console.log("Server disconnected (make sure API server is running)")
+      setTimeout(() => {
+        this._connectServer(url, onOpen, onMessage)
+      }, 1000)
+    }
+    
+    this.client.onerror = () => {
+      // Websocket errors not generally helpful
+      //console.log("Websocket error")
+    }
+  }
+  
+  async _handleMessage(env, name, payload) {
+    // Clients do not get requests - this should never get hit
+    console.error("Got request from server?!")
+    process.exit()
+  }
+  
+  async _handleEvent(env, msg) {
+    // Async events passed from the server to us
+    if (msg.type === 'block') {
+      delete this.auth
+      for (var i=0; i<this.blockHandlers.length; i++) {
+        const handler = this.blockHandlers[i] 
+        await handler(msg.payload)
+      }
+    } else if (msg.type === 'tick') {
+      if (this.subscriptions[msg.name] === undefined) {
+        console.log("Warning: no subscription for tick: " + msg.name)
+      } else {
+        for (i=0; i<this.tickHandlers.length; i++) {
+          const handler = this.tickHandlers[i]
+          await handler(msg.name, msg.payload)
+        }
+      }
+    } else if (msg.type === 'account') {
+      for (i=0; i<this.accountHandlers.length; i++) {
+        const handler = this.accountHandlers[i]
+        await handler(msg.name, msg.payload)
+      }
+    }
+  }
+  
+  async _handleSend(str) {
+    // Handle errors from outgoing messages we're sending to the server
+    try {
+      this.client.send(str)
+    } catch (err) {
+      console.log("Send: " + err.message)
+    }
   }
   
   addBlockHandler(handler) {
@@ -120,93 +166,6 @@ class API {
   
   addAccountHandler(handler) {
     this.accountHandlers.push(handler)
-  }
-  
-  async handleMessage(env, name, payload) {
-    console.log("handleMessage")
-  }
-  
-  async init(keys, cb) {
-    // If keys passed in, use them, otherwise generate new account
-    if (keys === "software") {
-      console.log("Creating wallet")
-      const mnemonic = await wallet.generateNewMnemonic()
-      if (typeof cb === "function") cb(mnemonic)
-      this.wallet = wallet.newFromHD("micro", 0, 0)
-      await this.wallet.init(mnemonic)
-      this.wallettype = "software"
-    } else if (keys === "ledger") {
-      this.getApp = cb
-      const app = await this.getApp()
-      const path = [44, 118, 0, 0, 0]
-      const response = await app.getAddressAndPubKey(path, "micro")
-      if (response.return_code !== 0x9000) {
-        throw new Error("Ledger initialization failed")
-      }
-      this.wallet = wallet.newFromLedger(response.compressed_pk.toString('hex'), response.bech32_address)
-    } else if (Array.isArray(keys)) {
-      const mnemonic = keys.join(" ")
-      this.wallet =wallet.newFromHD("micro", 0, 0)
-      await this.wallet.init(mnemonic)
-      this.wallettype = "software"
-    } else {
-      console.log("Using wallet: " + keys.acct)
-      this.wallet = wallet.newFromKey("micro", Buffer.from(keys.priv, 'hex'))
-    }
-    
-    const api = this
-    await new Promise((resolve, reject) => {
-      connectServer(this.url, async client => {
-        this.client = client
-        const response = await this.protocol.newMessage('connect', {
-          acct: this.wallet.address
-        })
-        if (!response.status) {
-          reject()
-          throw new Error("Connect: " + response.error)
-        }
-        api.markets = response.markets
-        api.durations = response.durations
-        Object.keys(this.subscriptions).map(async key => {
-          if (this.subscriptions[key] > 0) {
-            this.subscriptions[key]--
-            console.log("Resubscribing: " + key)
-            await this.subscribe(key)
-          }
-        })
-        resolve()
-      }, async msg => {
-        const response = await this.protocol.process(null, msg)
-        if (response !== undefined) {
-          client.send(response)
-        }
-      })
-    })
-    
-    // Wait connection
-    await new Promise(res => {
-      setInterval(() => {
-        if (this.client !== undefined) {
-          res()
-        }
-      }, 100)
-    })
-    
-    return {
-      type: this.wallettype,
-      acct: this.wallet.address,
-      pub: this.wallet.pub.toString("hex"),
-      priv: this.wallet.priv.toString("hex")
-    }
-  }
-  
-  async getWallet() {
-    return {
-      type: this.wallettype,
-      acct: this.wallet.address,
-      pub: this.wallet.pub.toString("hex"),
-      priv: this.wallet.priv.toString("hex")
-    }
   }
   
   getMarkets() {
@@ -247,12 +206,12 @@ class API {
     }
   }
   
-  async blockInfo() {
-    const response = await this.protocol.newMessage('blockinfo')
+  async getParams() {
+    const response = await this.protocol.newMessage('getparams')
     if (!response.status) {
-      throw new Error("Status request: " + response.error)
+      throw new Error("Get params: " + response.error)
     }
-    return response
+    return response.info
   }
   
   async getAccountInfo(acct) {
@@ -402,152 +361,72 @@ class API {
   
   // Transactions
   
-  async getAccountAuth(acct) {
+  async signAndBroadcast(factory, payload, protoChanges) {
+    // get account auth
     const response = await this.protocol.newMessage('getauthinfo', {
-      acct: acct
+      acct: this.signer.address
     })
     if (!response.status) {
       throw new Error("Account not found: please add funds and try again")
     }
-    return response.info
-  }
+    const auth = response.info
     
-    /*
-  async postTx(msg) {
-    if (this.wallettype === "ledger") {
-      const app = await this.getApp()
-      const path = [44, 118, 0, 0, 0]
-      const message = wallet.prepare(msg.tx, msg.sequence, msg.accountNumber, msg.chainId)
-      const response = await app.sign(path, message)
-      if (response.return_code !== 0x9000) {
-        throw new Error("Ledger transaction rejected")
-      }
-      var signature = response.signature
-      var sigBuf = Buffer.from(response.signature)
-      if (sigBuf[0] !== 0x30) {
-        throw new Error("ASN: invalid encoding")
-      }
-      sigBuf = sigBuf.slice(2, sigBuf[1] + 2)
-      if (sigBuf[0] !== 0x02) {
-        throw new Error("ASN: invalid encoding")
-      }
-      var r = sigBuf.slice(2, sigBuf[1] + 2)
-      if (r.length === 33) r = r.slice(1) // remove sign byte
-      const sIndex = sigBuf[1] + 2
-      if (sigBuf[sIndex] !== 2) {
-        throw new Error("ASN: invalid encoding")
-      }
-      var s = sigBuf.slice(sIndex+2, sIndex + sigBuf[sIndex+1] + 2)
-      if (s.length === 33) s = s.slice(1) // remove sign byte
-      sigBuf = Buffer.concat([r, s])
-      const aminokey = Buffer.from("eb5ae98721" + this.wallet.publicKey, "hex")
-      var signed = {
-        type: "cosmos-sdk/StdTx",
-        value: Object.assign({}, msg.tx, {
-          signatures: [{
-            signature: sigBuf.toString('base64'),
-            pub_key: aminokey.toString('base64')
-          }]
-        })
-      }
-    } else {
-      signed = wallet.sign(msg.tx, this.wallet, {
-        sequence: msg.sequence,
-        account_number: msg.accountNumber,
-        chain_id: msg.chainId
-      })
-    }
-    const res = await this.protocol.newMessage('posttx', {
-      tx: signed,
-      sequence: msg.sequence
-    })
-    if (!res.status) {
-      throw new Error("Post Tx: " + res.error)
-    }
-    return res.info
-  }
-  */
-  
-  async postTx(tx, txtype, gas) {
-    if (this.auth === undefined) {
-      this.auth = await this.getAccountAuth(this.wallet.address)
-    }
-    const sequence = this.auth.sequence++
-    const hash = tx.createSigningHash(this.wallet.pub, this.auth.chainid, this.auth.account, sequence, gas)
-    if (this.wallettype === "ledger") {
-      // not supported yet
-    } else {
-      const sig = this.wallet.sign(hash)
-      var bytes = tx.generateBroadcastBytes(sig)
-    }
-    const res = await this.protocol.newMessage('posttx', {
-      tx: bytes.toString("base64"),
+    console.log("Auth=" + JSON.stringify(auth, null, 2))
+    
+    // sign and publish tx
+    const tx = factory.build(payload, auth.chainid, auth.account, auth.sequence)
+    const sig = await this.signer.sign(tx)
+    const res = factory.publish(Object.assign(payload, protoChanges), this.signer.getPubKey(), sig)
+    
+    // post tx
+    const sequence = auth.sequence++
+    const post_result = await this.protocol.newMessage('posttx', {
+      tx: res.toString("base64"),
       sequence: sequence,
-      type: txtype
+      type: factory.type
     })
-    if (!res.status) {
-      throw new Error("Post Tx: " + res.error)
+    if (!post_result.status) {
+      throw new Error("Post Tx: " + post_result.error)
     }
-    return res.info
-  }
-  
-  async send(from, to, amount) {
-    const msg = new codec.Send(from, to, amount)
-    const tx = new codec.Tx(msg)
-    return await this.postTx(tx, "send", 200000)
+    return post_result.info
   }
   
   async createQuote(market, duration, backing, spot, ask, bid) {
     if (bid === undefined) {
       bid = "0premium"
     }
-    const msg = new codec.Create(market, duration, this.wallet.address, backing, spot, ask, bid)
-    const tx = new codec.Tx(msg)
-    return await this.postTx(tx, "create", 1000000) 
+    const payload = {
+      market: market,
+      duration: duration,
+      provider: this.signer.getAddress(),
+      backing: backing,
+      spot: spot,
+      ask: ask,
+      bid: bid
+    }
+    const factory = new TxFactory("create", 500000)
+    return await this.signAndBroadcast(factory, payload, { provider: this.signer.getAddressBytes() })
   }
   
   async cancelQuote(id) {
-    const msg = new codec.Cancel(id, this.wallet.address)
-    const tx = new codec.Tx(msg)
-    return await this.postTx(tx, "cancel", 1000000)
   }
   
   async depositQuote(id, deposit) {
-    const msg = new codec.Deposit(id, this.wallet.address, deposit)
-    const tx = new codec.Tx(msg)
-    return await this.postTx(tx, "deposit", 1000000)
   }
   
   async withdrawQuote(id, withdraw) {
-    const msg = new codec.Withdraw(id, this.wallet.address, withdraw)
-    const tx = new codec.Tx(msg)
-    return await this.postTx(tx, "withdraw", 1000000)
   }
   
   async updateQuote(id, newspot, newask, newbid) {
-    const msg = new codec.Update(id, this.wallet.address, newspot, newask, newbid)
-    const tx = new codec.Tx(msg)
-    return await this.postTx(tx, "update", 1000000)
   }
   
   async marketTrade(market, duration, ordertype, quantity) {
-    const msg = new codec.Trade(market, duration, this.wallet.address, ordertype, quantity)
-    const tx = new codec.Tx(msg)
-    return await this.postTx(tx, "trade", 1000000)
   }
   
   async pickTrade(id, ordertype) {
-    const msg = new codec.Pick(id, this.wallet.address, ordertype)
-    const tx = new codec.Tx(msg)
-    return await this.postTx(tx, "pick", 1000000)
   }
   
   async settleTrade(id) {
-    const msg = new codec.Settle(id, this.wallet.address)
-    const tx = new codec.Tx(msg)
-    return await this.postTx(tx, "settle", 1000000)
   }
   
 }
-
-module.exports = API

@@ -12,6 +12,8 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@ledgerhq/hw-transport-node-hid": "^5.41.0",
+    "@ledgerhq/hw-transport-webusb": "^5.41.0",
     "axios": "^0.18.0",
     "bech32": "^1.1.3",
     "bignumber.js": "^9.0.1",
@@ -22,8 +24,10 @@
     "express": "^4.16.4",
     "google-protobuf": "^3.13.0",
     "js-sha256": "^0.9.0",
+    "ledger-cosmos-js": "^2.1.8",
     "secp256k1": "^4.0.2",
     "websocket": "^1.0.31"
   },
-  "description": "Microtick API"
+  "description": "Microtick API",
+  "type": "module"
 }
