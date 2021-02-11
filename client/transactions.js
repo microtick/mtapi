@@ -1,12 +1,12 @@
 const txlookup = {
   cancel: "microtick/Cancel",
   create: "microtick/Create",
-  deposit: "/microtick/Deposit",
-  withdraw: "/microtick/Withdraw",
-  update: "/microtick/Update",
-  trade: "/microtick/Trade",
-  pick: "/microtick/Pick",
-  settle: "/microtick/Settle"
+  deposit: "microtick/Deposit",
+  withdraw: "microtick/Withdraw",
+  update: "microtick/Update",
+  trade: "microtick/Trade",
+  pick: "microtick/Pick",
+  settle: "microtick/Settle"
 }
 
 export class TxFactory {

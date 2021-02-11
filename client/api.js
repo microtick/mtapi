@@ -215,9 +215,11 @@ class MTAPI {
     return response.info
   }
   
-  async getAccountInfo(acct) {
+  async getAccountInfo(acct, offset, limit) {
     const response = await this.protocol.newMessage('getacctinfo', {
-      acct: acct
+      acct: acct,
+      offset: offset,
+      limit: limit
     })
     if (!response.status) {
       throw new Error("Get account info: " + response.error)
@@ -258,10 +260,12 @@ class MTAPI {
     return response.info
   }
   
-  async getSyntheticInfo(market, dur) {
+  async getSyntheticInfo(market, dur, offset, limit) {
     const response = await this.protocol.newMessage('getsyntheticinfo', {
       market: market,
-      duration: dur
+      duration: dur,
+      offset: offset,
+      limit: limit
     })
     if (!response.status) {
       throw new Error("Get synthetic info: " + response.error)
@@ -364,7 +368,7 @@ class MTAPI {
   
   // Transactions
   
-  async signAndBroadcast(factory, payload, gas) {
+  async signAndBroadcast(factory, payload) {
     // get account auth
     const response = await this.protocol.newMessage('getauthinfo', {
       acct: this.signer.address
@@ -394,14 +398,16 @@ class MTAPI {
     
     // post tx
     const sequence = auth.sequence++
-    const post_result = await this.protocol.newMessage('posttx', {
+    const txreq = {
       type: factory.type,
       tx: payload,
       pubkey: this.signer.getPubKey(),
       sig: sig,
-      gas: gas,
+      gas: factory.gas,
       sequence: sequence,
-    })
+    }
+    
+    const post_result = await this.protocol.newMessage('posttx', txreq)
     if (!post_result.status) {
       throw new Error("Post Tx: " + post_result.error)
     }
@@ -409,6 +415,9 @@ class MTAPI {
   }
   
   async createQuote(market, duration, backing, spot, ask, bid) {
+    if (spot === undefined || ask === undefined) {
+      throw new Error("All quotes must have both a spot and an ask")
+    }
     if (bid === undefined) {
       bid = "0premium"
     }
@@ -421,8 +430,8 @@ class MTAPI {
       ask: ask,
       bid: bid
     }
-    const factory = new TxFactory("create", 500000)
-    return await this.signAndBroadcast(factory, payload, 500000)
+    const factory = new TxFactory("create")
+    return await this.signAndBroadcast(factory, payload)
   }
   
   async cancelQuote(id) {
@@ -430,8 +439,8 @@ class MTAPI {
       id: id,
       requester: this.signer.getAddress()
     }
-    const factory = new TxFactory("cancel", 500000)
-    return await this.signAndBroadcast(factory, payload, 500000)
+    const factory = new TxFactory("cancel")
+    return await this.signAndBroadcast(factory, payload)
   }
   
   async depositQuote(id, deposit) {
@@ -440,8 +449,8 @@ class MTAPI {
       requester: this.signer.getAddress(),
       deposit: deposit
     }
-    const factory = new TxFactory("deposit", 500000)
-    return await this.signAndBroadcast(factory, payload, 500000)
+    const factory = new TxFactory("deposit")
+    return await this.signAndBroadcast(factory, payload)
   }
   
   async withdrawQuote(id, withdraw) {
@@ -450,23 +459,26 @@ class MTAPI {
       requester: this.signer.getAddress(),
       withdraw: withdraw
     }
-    const factory = new TxFactory("withdrawt", 500000)
-    return await this.signAndBroadcast(factory, payload, 500000)
+    const factory = new TxFactory("withdrawt")
+    return await this.signAndBroadcast(factory, payload)
   }
   
   async updateQuote(id, newspot, newask, newbid) {
+    if (newspot === undefined || newask === undefined) {
+      throw new Error("All quotes must have both a spot and an ask")
+    }
     if (newbid === undefined) {
       newbid = "0premium"
     }
     const payload = {
       id: id,
       requester: this.signer.getAddress(),
-      newSpot: newspot,
-      newAsk: newask,
-      newBid: newbid
+      new_spot: newspot,
+      new_ask: newask,
+      new_bid: newbid
     }
-    const factory = new TxFactory("update", 500000)
-    return await this.signAndBroadcast(factory, payload, 500000)
+    const factory = new TxFactory("update")
+    return await this.signAndBroadcast(factory, payload)
   }
   
   async marketTrade(market, duration, ordertype, quantity) {
@@ -474,21 +486,21 @@ class MTAPI {
       market: market,
       duration: duration,
       taker: this.signer.getAddress(),
-      orderType: ordertype,
+      order_type: ordertype,
       quantity: quantity
     }
-    const factory = new TxFactory("trade", 500000)
-    return await this.signAndBroadcast(factory, payload, 500000)
+    const factory = new TxFactory("trade")
+    return await this.signAndBroadcast(factory, payload)
   }
   
   async pickTrade(id, ordertype) {
     const payload = {
       id: id,
       taker: this.signer.getAddress(),
-      orderType: ordertype
+      order_type: ordertype
     }
-    const factory = new TxFactory("pick", 500000)
-    return await this.signAndBroadcast(factory, payload, 500000)
+    const factory = new TxFactory("pick")
+    return await this.signAndBroadcast(factory, payload)
   }
   
   async settleTrade(id) {
@@ -496,8 +508,8 @@ class MTAPI {
       id: id,
       requester: this.signer.getAddress()
     }
-    const factory = new TxFactory("settle", 500000)
-    return await this.signAndBroadcast(factory, payload, 500000)
+    const factory = new TxFactory("settle")
+    return await this.signAndBroadcast(factory, payload)
   }
   
 }

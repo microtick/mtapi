@@ -37,6 +37,9 @@ process.on('unhandledRejection', error => {
   //process.exit(-1)
 })
 
+// Protobuf message package name
+const PROTOBUF_MICROTICK_PACKAGE = "microtick.v1beta1.msg"
+
 // Transactions
 const NEWBLOCK = "tm.event='NewBlock'"
 const TXTIMEOUT = config.timeout
@@ -487,10 +490,10 @@ const processBlock = async (height) => {
                 case "/cosmos.gov.v1beta1.MsgSubmitProposal":
                   const proposal = codec.decode(msg.type_url.slice(1), Buffer.from(msg.value, 'base64'), true)
                   switch (proposal.content["@type"]) {
-                    case '/microtick.msg.DenomChangeProposal':
+                    case '/' + PROTOBUF_MICROTICK_PACKAGE + '.DenomChangeProposal':
                       console.log("Denom change: " + proposal.content.extDenom + " ratio: " + proposal.content.extPerInt)
                       break
-                    case '/microtick.msg.AddMarketsProposal':
+                    case '/' + PROTOBUF_MICROTICK_PACKAGE + '.AddMarketsProposal':
                       proposal.content.markets.map(async m => {
                         console.log("Add market: " + m.name)
                         if (USE_DATABASE) {
@@ -602,8 +605,8 @@ const processMicrotickTx = async (block, txstruct) => {
     const result = txstruct.result.data[i]
     const item = {}
     switch (message.type_url) {
-    case "/microtick.msg.TxCancelQuote":
-      var data = codec.decode("microtick.msg.CancelQuoteData", Buffer.from(result.data, 'base64'), true)
+    case "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxCancelQuote":
+      var data = codec.decode(PROTOBUF_MICROTICK_PACKAGE + ".CancelQuoteData", Buffer.from(result.data, 'base64'), true)
       item.type = "cancel"
       item.time = data.time
       item.id = payload.id
@@ -617,8 +620,8 @@ const processMicrotickTx = async (block, txstruct) => {
       item.slash = convertCoin(data.slash, "1e18").amount
       item.commission = convertCoin(data.commission, "1e18").amount
       break
-    case "/microtick.msg.TxCreateQuote":
-      data = codec.decode("microtick.msg.CreateQuoteData", Buffer.from(result.data, 'base64'), true)
+    case "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxCreateQuote":
+      data = codec.decode(PROTOBUF_MICROTICK_PACKAGE + ".CreateQuoteData", Buffer.from(result.data, 'base64'), true)
       item.type = "create"
       item.time = data.time
       item.id = data.id
@@ -634,8 +637,8 @@ const processMicrotickTx = async (block, txstruct) => {
       item.commission = convertCoin(data.commission, "1e18").amount
       item.reward = convertCoin(data.reward, "1e6").amount
       break
-    case "/microtick.msg.TxDepositQuote":
-      data = codec.decode("microtick.msg.DepositQuoteData", Buffer.from(result.data, 'base64'), true)
+    case "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxDepositQuote":
+      data = codec.decode(PROTOBUF_MICROTICK_PACKAGE + ".DepositQuoteData", Buffer.from(result.data, 'base64'), true)
       item.type = "deposit"
       item.time = data.time
       item.id = payload.id
@@ -649,8 +652,8 @@ const processMicrotickTx = async (block, txstruct) => {
       item.commission = convertCoin(data.commission, "1e18").amount
       item.reward = convertCoin(data.reward, "1e6").amount
       break
-    case "/microtick.msg.TxPickTrade":
-      data = codec.decode("microtick.msg.PickTradeData", Buffer.from(result.data, 'base64'), true)
+    case "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxPickTrade":
+      data = codec.decode(PROTOBUF_MICROTICK_PACKAGE + ".PickTradeData", Buffer.from(result.data, 'base64'), true)
       item.type = "pick"
       item.time = data.time
       item.hash = txstruct.hash
@@ -663,8 +666,8 @@ const processMicrotickTx = async (block, txstruct) => {
       item.commission = convertCoin(data.commission, "1e18").amount
       item.reward = convertCoin(data.reward, "1e6").amount
       break
-    case "/microtick.msg.TxSettleTrade":
-      data = codec.decode("microtick.msg.SettleTradeData", Buffer.from(result.data, 'base64'), true)
+    case "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxSettleTrade":
+      data = codec.decode(PROTOBUF_MICROTICK_PACKAGE + ".SettleTradeData", Buffer.from(result.data, 'base64'), true)
       item.type = "settle"
       item.time = data.time
       item.id = data.id
@@ -684,8 +687,8 @@ const processMicrotickTx = async (block, txstruct) => {
         }
       })
       break
-    case "/microtick.msg.TxMarketTrade":
-      data = codec.decode("microtick.msg.MarketTradeData", Buffer.from(result.data, 'base64'), true)
+    case "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxMarketTrade":
+      data = codec.decode(PROTOBUF_MICROTICK_PACKAGE + ".MarketTradeData", Buffer.from(result.data, 'base64'), true)
       item.type = "trade"
       item.time = data.time
       item.hash = txstruct.hash
@@ -698,8 +701,8 @@ const processMicrotickTx = async (block, txstruct) => {
       item.commission = convertCoin(data.commission, "1e18").amount
       item.reward = convertCoin(data.reward, "1e6").amount
       break
-    case "/microtick.msg.TxUpdateQuote":
-      data = codec.decode("microtick.msg.UpdateQuoteData", Buffer.from(result.data, 'base64'), true)
+    case "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxUpdateQuote":
+      data = codec.decode(PROTOBUF_MICROTICK_PACKAGE + ".UpdateQuoteData", Buffer.from(result.data, 'base64'), true)
       item.type = "update"
       item.time = data.time
       item.id = payload.id
@@ -714,8 +717,8 @@ const processMicrotickTx = async (block, txstruct) => {
       item.commission = convertCoin(data.commission, "1e18").amount
       item.reward = convertCoin(data.reward, "1e6").amount
       break
-    case "/microtick.msg.TxWithdrawQuote":
-      data = codec.decode("microtick.msg.WithdrawQuoteData", Buffer.from(result.data, 'base64'), true)
+    case "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxWithdrawQuote":
+      data = codec.decode(PROTOBUF_MICROTICK_PACKAGE + ".WithdrawQuoteData", Buffer.from(result.data, 'base64'), true)
       item.type = "withdraw"
       item.time = data.time
       item.id = payload.id
@@ -842,14 +845,14 @@ const processMicrotickTx = async (block, txstruct) => {
 }
 
 const txlookup = {
-  cancel: "/microtick.msg.TxCancelQuote",
-  create: "/microtick.msg.TxCreateQuote",
-  deposit: "/microtick.msg.TxDepositQuote",
-  withdraw: "/microtick.msg.TxWithdrawQuote",
-  update: "/microtick.msg.TxUpdateQuote",
-  trade: "/microtick.msg.TxMarketTrade",
-  pick: "/microtick.msg.TxPickTrade",
-  settle: "/microtick.msg.TxSettleTrade"
+  cancel: "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxCancelQuote",
+  create: "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxCreateQuote",
+  deposit: "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxDepositQuote",
+  withdraw: "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxWithdrawQuote",
+  update: "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxUpdateQuote",
+  trade: "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxMarketTrade",
+  pick: "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxPickTrade",
+  settle: "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxSettleTrade"
 }
 
 const publish = (type, payload, pubkey, sig, gas) => {
@@ -866,6 +869,23 @@ const publish = (type, payload, pubkey, sig, gas) => {
       }
     }
   }
+  
+  // convert non_camel_case keys to camelCase (incompatibility in protobufjs library
+  // that doesn't honor the gogoproto.jsontag attribute)
+  const keys = Object.keys(payload)
+  keys.map(key => {
+    const ary = key.split("_")
+    if (ary.length > 1) {
+      let camel = ary[0]
+      for (var i=1; i<ary.length; i++) {
+        const syllable = ary[i]
+        camel = camel + syllable.substring(0, 1).toUpperCase() + syllable.substring(1)
+      }
+      //console.log("Substituting " + key + " with " + camel)
+      payload[camel] = payload[key]
+      delete payload[key]
+    }
+  })
   
   tx.body.messages.push(Object.assign({
     "@type": txlookup[type],
@@ -1065,7 +1085,21 @@ const handleMessage = async (env, name, payload) => {
         break
       case 'getacctinfo':
         const acct = payload.acct === undefined ? env.acct : payload.acct
-        res = await queryRest("/microtick/account/" + acct)
+        var url = "/microtick/account/" + acct
+        var params = false
+        if (payload.offset !== undefined) {
+          url = url + "?offset=" + payload.offset
+          params = true
+        }
+        if (payload.limit !== undefined) {
+          if (params) {
+            url = url + "&"
+          } else {
+            url = url + "?"
+          }
+          url = url + "limit=" + payload.limit
+        }
+        res = await queryRest(url)
         returnObj = {
           status: true,
           info: {
@@ -1124,8 +1158,8 @@ const handleMessage = async (env, name, payload) => {
         }
         break
       case 'getorderbookinfo':
-        let url = "/microtick/orderbook/" + payload.market + "/" + payload.duration
-        let params = false
+        url = "/microtick/orderbook/" + payload.market + "/" + payload.duration
+        params = false
         if (payload.offset !== undefined) {
           url = url + "?offset=" + payload.offset
           params = true
@@ -1159,7 +1193,21 @@ const handleMessage = async (env, name, payload) => {
         }
         break
       case 'getsyntheticinfo':
-        res = await queryRest("/microtick/synthetic/" + payload.market + "/" + payload.duration)
+        url = "/microtick/synthetic/" + payload.market + "/" + payload.duration
+        params = false
+        if (payload.offset !== undefined) {
+          url = url + "?offset=" + payload.offset
+          params = true
+        }
+        if (payload.limit !== undefined) {
+          if (params) {
+            url = url + "&"
+          } else {
+            url = url + "?"
+          }
+          url = url + "limit=" + payload.limit
+        }
+        res = await queryRest(url)
         const synListParser = q => {
           return {
             spot: parseFloat(q.spot.amount),
