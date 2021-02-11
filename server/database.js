@@ -65,7 +65,6 @@ const DB = {
     await db.createCollection('markets')
     await db.createCollection('ticks')
     await db.createCollection('quotes')
-    await db.createCollection('updates')
     await db.createCollection('books')
     await db.createCollection('trades')
     
@@ -151,17 +150,6 @@ const DB = {
         id: 1
       }, {
         name: 'history'
-      })
-    }
-    
-    const hasUpdateIndex = await db.collection('updates').indexExists('id')
-    if (!hasUpdateIndex) {
-      console.log("Creating update index")
-      await db.collection('updates').createIndex({
-        height: 1,
-        id: 1
-      }, {
-        name: 'id'
       })
     }
     
@@ -261,7 +249,10 @@ const DB = {
       id: id,
       provider: provider,
       hash: hash,
-      active: true
+      backing: backing,
+      spot: spot,
+      ask: ask,
+      bid: bid
     })
     await db.collection('books').insertOne({
       id: id,
@@ -274,7 +265,7 @@ const DB = {
     })
   },
   
-  updateQuoteBacking: async (height, id, hash, remainBacking) => {
+  updateQuoteBacking: async (height, id, hash, remainBacking, ref) => {
     await db.collection('books').updateOne({
       id: id
     }, {
@@ -282,8 +273,10 @@ const DB = {
         backing: remainBacking
       }
     })
-    await db.collection('updates').insertOne({
+    await db.collection('quotes').insertOne({
       height: height,
+      type: "update",
+      ref: ref,
       id: id,
       hash: hash,
       backing: remainBacking
@@ -300,8 +293,10 @@ const DB = {
         bid: newBid
       }
     })
-    await db.collection('updates').insertOne({
+    await db.collection('quotes').insertOne({
       height: height,
+      type: "update",
+      ref: "params",
       id: id,
       hash: hash,
       spot: newSpot,
@@ -310,14 +305,14 @@ const DB = {
     })
   },
   
-  removeQuote: async id => {
+  removeQuote: async (height, hash, id, ref) => {
     await db.collection('books').deleteOne({ id: id })
-    await db.collection('quotes').updateOne({
-      id: id
-    }, {
-      $set: {
-        active: false
-      }
+    await db.collection('quotes').insertOne({
+      height: height,
+      hash: hash,
+      id: id,
+      type: "final",
+      ref: ref
     })
   },
   

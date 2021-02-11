@@ -459,7 +459,7 @@ class MTAPI {
       requester: this.signer.getAddress(),
       withdraw: withdraw
     }
-    const factory = new TxFactory("withdrawt")
+    const factory = new TxFactory("withdraw")
     return await this.signAndBroadcast(factory, payload)
   }
   

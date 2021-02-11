@@ -225,7 +225,7 @@ const broadcastBlock = block => {
   Object.keys(clients).map(id => {
     const client = clients[id] 
     if (client !== undefined) {
-      console.log("  Event New Block => [" + id + "]")
+      //console.log("  New Block => [" + id + "]")
       client.send(msg)
     }
   })
@@ -239,7 +239,7 @@ const broadcastTick = (market, payload) => {
   marketSubscriptions[market].map(id => {
     const client = clients[id]
     if (client !== undefined) {
-      console.log("  Event Market Tick: " + market + " => ["+ id + "]")
+      console.log("  Market Tick: " + market + " => ["+ id + "]")
       client.send(msg)
     }
   })
@@ -252,7 +252,7 @@ const sendAccountEvent = (acct, event, payload) => {
     ids[acct].map(id => {
       const client = clients[id]
       if (client !== undefined) {
-        console.log("  Account Event: " + event + " => [" + id + "]")
+        console.log("  Account: " + event + " => [" + id + "]")
         client.send(msg)
       }
     })
@@ -370,10 +370,6 @@ const handleNewBlock = async obj => {
     console.log(txlog)
   }
     
-  // Check pending Tx hashes
-  const hashes = Object.keys(pending)
-  console.log(hashes.length + " Pending TXs")
-
   processing = false
 }
 
@@ -402,10 +398,21 @@ const processBlock = async (height) => {
   if (!syncing) {
     console.log()
   }
-  console.log("Block " + block.height + ": txs=" + num_txs)
+  
+  const hashes = Object.keys(pending)
+  console.log("Block " + block.height + ": txs=" + num_txs + " pending=" + hashes.length)
+  
   if (!syncing) {
+    broadcastBlock({
+      height: block.height,
+      time: block.time,
+      hash: block.block.header.last_block_id.hash,
+      chainid: chainid
+    })
     dump_subscriptions()
+    console.log("Events:")
   }
+  
   
   if (num_txs > 0) {
     const txs = block.block.data.txs
@@ -448,7 +455,11 @@ const processBlock = async (height) => {
             if (event.type === "message") {
               for (var attr = 0; attr < event.attributes.length; attr++) {
                 const a = event.attributes[attr]
-                txstruct.events[a.key] = a.value
+                //const key = Buffer.from(a.key, 'base64').toString()
+                //const value = Buffer.from(a.value, 'base64').toString()
+                const key = a.key
+                const value = a.value
+                txstruct.events[key] = value
               }
             }
             if (event.type === "transfer") {
@@ -471,13 +482,11 @@ const processBlock = async (height) => {
             if (!syncing && LOG_TRANSFERS) {
               txlog += "\n  " + transfer.amount + " " + transfer.sender + " -> " + transfer.recipient
             }
-            if (USE_DATABASE) {
-              transfer.amount.split(",").map(async amt => {
-                const coin = convertCoinString(amt)
-                await updateAccountBalance(height, hash, transfer.sender, coin.denom, -1 * coin.amount)
-                await updateAccountBalance(height, hash, transfer.recipient, coin.denom, coin.amount)
-              })
-            }
+            transfer.amount.split(",").map(async amt => {
+              const coin = convertCoinString(amt)
+              await updateAccountBalance(height, hash, transfer.sender, coin.denom, -1 * coin.amount)
+              await updateAccountBalance(height, hash, transfer.recipient, coin.denom, coin.amount)
+            })
           })
           
           //console.log("Result " + txstruct.module + " / " + txstruct.action + ": hash=" + shortHash(hash))
@@ -528,13 +537,11 @@ const processBlock = async (height) => {
         const value = Buffer.from(a.value, 'base64').toString()
         obj[key] = value
       })
-      if (USE_DATABASE) {
-        obj.amount.split(",").map(async amt => {
-          const coin = convertCoinString(amt)
-          await updateAccountBalance(height, "lookup:" + obj.recipient, obj.sender, coin.denom, -1 * coin.amount)
-          await updateAccountBalance(height, "lookup:" + obj.sender, obj.recipient, coin.denom, coin.amount)
-        })
-      }
+      obj.amount.split(",").map(async amt => {
+        const coin = convertCoinString(amt)
+        await updateAccountBalance(height, "lookup:" + obj.recipient, obj.sender, coin.denom, -1 * coin.amount)
+        await updateAccountBalance(height, "lookup:" + obj.sender, obj.recipient, coin.denom, coin.amount)
+      })
       // Do not log block transfers
       //if (!syncing && LOG_TRANSFERS) {
         //txlog += "\n  " + obj.amount + " " + obj.sender + " -> " + obj.recipient
@@ -546,16 +553,6 @@ const processBlock = async (height) => {
   }
   for (i=0; i<results.end_block_events.length; i++) {
     transfer_handler(results.end_block_events[i])
-  }
-  
-  if (!syncing) {
-    console.log("Events:")
-    broadcastBlock({
-      height: block.height,
-      time: block.time,
-      hash: block.block.header.last_block_id.hash,
-      chainid: chainid
-    })
   }
   
   if (USE_DATABASE) {
@@ -572,25 +569,26 @@ const convertTradeResultToObj = trade => {
   obj.strike = convertCoin(trade.strike, "1e18").amount
   obj.commission = convertCoin(trade.commission, "1e18").amount
   obj.settleIncentive = convertCoin(trade.settleIncentive, "1e18").amount
-  obj.legs = trade.legsList.map(leg => {
+  obj.legs = trade.legs.map(leg => {
     return {
-      legId: leg.legId,
+      legId: leg.legId === undefined ? 0 : leg.legId,
       type: leg.type ? "call" : "put",
       backing: convertCoin(leg.backing, "1e18").amount,
       premium: convertCoin(leg.premium, "1e18").amount,
       cost: convertCoin(leg.cost, "1e18").amount,
       quantity: convertCoin(leg.quantity, "1e18").amount,
-      long: bech32.encode("micro", bech32.toWords(Buffer.from(leg.pb_long, "base64"))),
-      short: bech32.encode("micro", bech32.toWords(Buffer.from(leg.pb_short, "base64"))),
+      long: bech32.encode("micro", bech32.toWords(Buffer.from(leg.long, "base64"))),
+      short: bech32.encode("micro", bech32.toWords(Buffer.from(leg.short, "base64"))),
       quoteId: leg.quoted.id,
       remainBacking: convertCoin(leg.quoted.remainBacking, "1e18").amount,
-      final: leg.quoted.pb_final
+      final: leg.quoted.final ? true : false
     }
   })
   return obj
 }
 
 const processMicrotickTx = async (block, txstruct) => {
+  console.log("processMicrotickTx")
   const tx = txstruct.tx
   if (tx.result !== undefined) {
     tx.result.height = block.height
@@ -673,13 +671,13 @@ const processMicrotickTx = async (block, txstruct) => {
       item.id = data.id
       item.hash = txstruct.hash
       item.settler = bech32.encode("micro", bech32.toWords(Buffer.from(data.settler, "base64")))
-      item.settleConsensus = convertCoin(data.pb_final, "1e18").amount
+      item.settleConsensus = convertCoin(data.final, "1e18").amount
       item.incentive = convertCoin(data.incentive, "1e18").amount
       item.commission = convertCoin(data.commission, "1e18").amount
       item.reward = convertCoin(data.reward, "1e6").amount
-      item.legs = data.legsList.map(leg => {
+      item.legs = data.legs.map(leg => {
         return {
-          legId: leg.legId,
+          legId: leg.legId === undefined ? 0 : leg.legId,
           settleAccount: bech32.encode("micro", bech32.toWords(Buffer.from(leg.settleAccount, "base64"))),
           settle: convertCoin(leg.settle, "1e18").amount,
           refundAccount: bech32.encode("micro", bech32.toWords(Buffer.from(leg.refundAccount, "base64"))),
@@ -743,6 +741,7 @@ const processMicrotickTx = async (block, txstruct) => {
       }
       broadcastTick(item.market, {
         height: txstruct.height,
+        hash: txstruct.hash,
         time: item.time,
         consensus: item.consensus
       })
@@ -766,9 +765,9 @@ const processMicrotickTx = async (block, txstruct) => {
             leg.type, item.trade.strike, item.trade.start, item.trade.expiration, leg.premium, leg.backing, 
             leg.quantity, leg.long, leg.short)
           if (leg.final) {
-            db.removeQuote(leg.quoteId)
+            db.removeQuote(txstruct.height, item.hash, leg.quoteId, "trade")
           } else {
-            db.updateQuoteBacking(leg.quoteId, item.hash, leg.remainBacking)
+            db.updateQuoteBacking(txstruct.height, leg.quoteId, item.hash, leg.remainBacking, item.type)
           }
         }
         sendAccountEvent(item.taker, "taker", {
@@ -824,7 +823,7 @@ const processMicrotickTx = async (block, txstruct) => {
     
     if (item.type === "deposit" || item.type === "withdraw") {
       if (USE_DATABASE) {
-        db.updateQuoteBacking(item.id, item.hash, item.backing)
+        db.updateQuoteBacking(txstruct.height, item.id, item.hash, item.backing, item.type)
       }
       sendAccountEvent(item.requester, "update", {
         hash: item.hash,
@@ -834,7 +833,7 @@ const processMicrotickTx = async (block, txstruct) => {
     
     if (item.type === "cancel") {
       if (USE_DATABASE) {
-        db.removeQuote(item.id)
+        db.removeQuote(txstruct.height, item.hash, item.id, "cancel")
       }
       sendAccountEvent(item.account, "cancel", {
         hash: item.hash,
@@ -907,7 +906,8 @@ const publish = (type, payload, pubkey, sig, gas) => {
 
   // add signature
   tx.signatures = [ sig ]
-
+  
+  //console.log(JSON.stringify(tx, null, 2))
   const txmsg = codec.create("cosmos.tx.v1beta1.Tx", tx)
   return txmsg.toString("base64")
 }
