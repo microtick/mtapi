@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
-DESTDIR=./root
+DESTDIR=./proto
+CODEC=./codec.js
 
 rm -rf $DESTDIR
 mkdir $DESTDIR
@@ -14,15 +15,15 @@ while read -r line; do
     destdir=`dirname $DESTDIR/$f`
     mkdir -p $destdir && cp $path/$f $DESTDIR/$f
   done
-done < ./paths
+done < ./protopaths.txt
 
-echo "// Automatically generated - do not edit!" > index.js
-echo "// --------------------------------------" >> index.js
-echo "const protobuf = require('protobufjs')" >> index.js
-echo "const files = [" >> index.js
-find root | grep \\.proto | awk '{print "  \"./" $0 "\","}' >> index.js
-echo "]" >> index.js
-cat << END >> index.js
+echo "// Automatically generated - do not edit!" > $CODEC
+echo "// --------------------------------------" >> $CODEC
+echo "const protobuf = require('protobufjs')" >> $CODEC
+echo "const files = [" >> $CODEC
+find $DESTDIR | grep \\.proto | awk '{print "  \"" $0 "\","}' >> $CODEC
+echo "]" >> $CODEC
+cat << END >> $CODEC
 const root = new protobuf.Root()
 root.loadSync(files)
 module.exports = {

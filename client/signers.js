@@ -58,11 +58,6 @@ export class SoftwareSigner {
     return this.address
   }
   
-  getAddressBytes() {
-    const decoded = bech32.decode(this.address)
-    return Buffer.from(bech32.fromWords(decoded.words)).toString('base64')
-  }
-  
   getPubKey() {
     return this.pub.toString('base64')
   }
@@ -116,11 +111,6 @@ export class LedgerSigner {
   
   getAddress() {
     return this.address
-  }
-  
-  getAddressBytes() {
-    const decoded = bech32.decode(this.address)
-    return Buffer.from(bech32.fromWords(decoded.words)).toString('base64')
   }
   
   getPubKey() {

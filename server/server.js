@@ -8,7 +8,7 @@ const bech32 = require('bech32')
 const BN = require('bignumber.js')
 
 const protocol = require('../lib/protocol.js')
-const codec = require('../proto/index.js')
+const codec = require('./codec.js')
 const config = JSON.parse(fs.readFileSync('./config.json'))
 
 // Set to true if you want blocks and events stored in mongo
@@ -19,7 +19,7 @@ const PRUNING_OFF = true
 
 const LOG_API = false
 const LOG_TX = false
-const LOG_TRANSFERS = true
+const LOG_TRANSFERS = false
 
 var chainid = null
 
@@ -29,12 +29,12 @@ if (USE_DATABASE) {
 
 process.on('unhandledRejection', error => {
   if (error !== undefined) {
-    console.log('unhandled promise rejection: ', error.message)
-    console.log(error.stack)
+    console.error('Unhandled API error: ', error.message)
+    //console.log(error.stack)
   } else {
-    console.log("promise rejection")
+    console.error("Promise rejection")
   }
-  process.exit(-1)
+  //process.exit(-1)
 })
 
 // Transactions
@@ -124,7 +124,7 @@ const connect = async () => {
   tmclient.on('message', msg => {
     const obj = JSON.parse(msg)
     if (obj.result === undefined) {
-      console.log("Tendermint message error: " + JSON.stringify(obj, null, 2))
+      console.error("Tendermint message error: " + JSON.stringify(obj, null, 2))
       tmclient.close()
       return
     }
@@ -141,7 +141,7 @@ const connect = async () => {
 
   tmclient.on('error', err => {
     this.err = err
-    console.log("Tendermint error: " + err.message)
+    console.error("Tendermint error: " + err.message)
   })
 }
 
@@ -445,17 +445,7 @@ const processBlock = async (height) => {
             if (event.type === "message") {
               for (var attr = 0; attr < event.attributes.length; attr++) {
                 const a = event.attributes[attr]
-                const key = Buffer.from(a.key, 'base64').toString()
-                if (a.value !== undefined) {
-                  const value = Buffer.from(a.value, 'base64').toString()
-                  if (Array.isArray(txstruct.events[key])) {
-                    if (!txstruct.events[key].includes(value)) txstruct.events[key].push(value)
-                  } else if (txstruct.events[key] === undefined) {
-                    txstruct.events[key] = value
-                  } else if (txstruct.events[key] !== value) {
-                    txstruct.events[key] = [ txstruct.events[key], value ]
-                  }
-                }
+                txstruct.events[a.key] = a.value
               }
             }
             if (event.type === "transfer") {
@@ -517,8 +507,8 @@ const processBlock = async (height) => {
             console.log(JSON.stringify(txstruct.tx.body.messagesList, null, 2))
           }
         } catch (err) {
-          console.log(err)
-          console.log("UNKNOWN TX TYPE")
+          console.error(err)
+          console.error("UNKNOWN TX TYPE")
           process.exit()
         }
       }
@@ -741,7 +731,7 @@ const processMicrotickTx = async (block, txstruct) => {
     }
     
     //console.log(JSON.stringify(txstruct, null, 2))
-    console.log(JSON.stringify(item, null, 2))
+    //console.log(JSON.stringify(item, null, 2))
   
     if (item.consensus !== undefined) {
       // add tick
@@ -849,6 +839,57 @@ const processMicrotickTx = async (block, txstruct) => {
       })
     }
   }
+}
+
+const txlookup = {
+  cancel: "/microtick.msg.TxCancelQuote",
+  create: "/microtick.msg.TxCreateQuote",
+  deposit: "/microtick.msg.TxDepositQuote",
+  withdraw: "/microtick.msg.TxWithdrawQuote",
+  update: "/microtick.msg.TxUpdateQuote",
+  trade: "/microtick.msg.TxMarketTrade",
+  pick: "/microtick.msg.TxPickTrade",
+  settle: "/microtick.msg.TxSettleTrade"
+}
+
+const publish = (type, payload, pubkey, sig, gas) => {
+  const tx = {
+    body: {
+      messages: [],
+    },
+    authInfo: {
+      signerInfos: [],
+      fee: {
+        gasLimit: {
+          low: gas,
+        }
+      }
+    }
+  }
+  
+  tx.body.messages.push(Object.assign({
+    "@type": txlookup[type],
+  }, payload))
+  
+  // add signer info
+  const si = {
+    publicKey: {
+      '@type': "/cosmos.crypto.secp256k1.PubKey",
+      key: pubkey
+    },
+    modeInfo: {
+      single: {
+        mode: "SIGN_MODE_LEGACY_AMINO_JSON"
+      }
+    }
+  }
+  tx.authInfo.signerInfos.push(si)
+
+  // add signature
+  tx.signatures = [ sig ]
+
+  const txmsg = codec.create("cosmos.tx.v1beta1.Tx", tx)
+  return txmsg.toString("base64")
 }
 
 // API Server Listener
@@ -1083,7 +1124,21 @@ const handleMessage = async (env, name, payload) => {
         }
         break
       case 'getorderbookinfo':
-        res = await queryRest("/microtick/orderbook/" + payload.market + "/" + payload.duration)
+        let url = "/microtick/orderbook/" + payload.market + "/" + payload.duration
+        let params = false
+        if (payload.offset !== undefined) {
+          url = url + "?offset=" + payload.offset
+          params = true
+        }
+        if (payload.limit !== undefined) {
+          if (params) {
+            url = url + "&"
+          } else {
+            url = url + "?"
+          }
+          url = url + "limit=" + payload.limit
+        }
+        res = await queryRest(url)
         const quoteListParser = q => {
           return {
             id: q.id,
@@ -1270,10 +1325,11 @@ const handleMessage = async (env, name, payload) => {
           info: {
             chainid: chainid,
             account: res.account.accountNumber,
-            sequence: res.account.sequence !== undefined ? res.account.sequenct : 0
+            sequence: res.account.sequence !== undefined ? res.account.sequence : 0
           }
         }
       case 'posttx':
+        const publishTx = publish(payload.type, payload.tx, payload.pubkey, payload.sig, payload.gas)
         res = await new Promise(async (outerResolve, outerReject) => {
           const pendingTx = {
             sequence: payload.sequence,
@@ -1282,50 +1338,25 @@ const handleMessage = async (env, name, payload) => {
               if (pendingTx.submitted) return
               try {
                 console.log("Posting [" + env.id + "] TX " + payload.type)
-                console.log(payload.tx)
                 pendingTx.submitted = true
 
-/*
-  const auth = await codec.query('/cosmos.auth.v1beta1.QueryAccountRequest', '/cosmos.auth.v1beta1.QueryAccountResponse', async raw => {
-    raw.setAddress(acct)
-    const data = {
-      jsonrpc: "2.0",
-      id: 0,
-      method: "abci_query",
-      params: {
-        data: Buffer.from(raw.serializeBinary()).toString('hex'),
-        height: "0",
-        path: "/cosmos.auth.v1beta1.Query/Account",
-        prove: false
-      }
-    }
-    const res = await axios.post("http://" + config.tendermint, data)
-    if (res.data.result.response.code !== 0) {
-      throw new Error(res.data.result.response.log)
-    }
-    return res.data.result.response.value
-  })
-  */
-  console.log(Buffer.from(payload.tx, 'base64').toString('hex'))
-                
                 const res = await axios.post('http://' + config.tendermint, {
                   jsonrpc: "2.0",
                   id: 1,
                   method: "broadcast_tx_commit",
                   params: {
-                    tx: payload.tx
+                    tx: publishTx
                   }
                 }, {
                   headers: {
                     "Content-Type": "text/json"
                   }
                 })
-                console.log(JSON.stringify(res.data, null, 2))
   
                 if (res.data.result.check_tx.code !== 0) {
                   // error
                   outerReject(new Error(res.data.result.check_tx.log))
-                  console.log("  outer post failed: " + res.data.result.check_tx.log)
+                  console.error("  outer posttx promise failed: " + res.data.result.check_tx.log)
                   return
                 } else {
                   if (LOG_TX) console.log("  hash=" + shortHash(res.data.result.hash))
@@ -1336,7 +1367,7 @@ const handleMessage = async (env, name, payload) => {
                       resolve(txres)
                     },
                     failure: err => {
-                      console.log("  transaction failed: " + err)
+                      console.error("  posttx transaction failed: " + err)
                       reject(err)
                     },
                     timedout: false,
@@ -1360,7 +1391,7 @@ const handleMessage = async (env, name, payload) => {
                 }
                 outerResolve(txres)
               } catch (err) {
-                console.log("TX failed: " + acct)
+                console.error("TX failed: " + acct + " sequence: " + payload.sequence)
                 outerReject(err)
               }
             }
@@ -1389,11 +1420,13 @@ const handleMessage = async (env, name, payload) => {
     return returnObj
     
   } catch (err) {
-    console.log("API error: " + name + ": " + err.message)
-    if (config.development) {
-      console.log(err)
+    if (err !== undefined) {
+      if (config.development) {
+        console.error(err)
+      } else {
+        console.error("API error: " + name + ": " + err.message)
+      }
     }
-    if (err !== undefined) console.log(err)
     return {
       status: false,
       error: err.message === undefined ? "Request failed" : err.message

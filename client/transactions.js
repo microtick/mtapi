@@ -1,38 +1,12 @@
-import codec from '../proto/index.js'
-
 const txlookup = {
-  cancel: {
-    proto: "/microtick.msg.TxCancelQuote",
-    legacy: "microtick/Cancel"
-  },
-  create: {
-    proto: "/microtick.msg.TxCreateQuote",
-    legacy: "microtick/Create"
-  },
-  deposit: {
-    proto: "/microtick.msg.TxDepositQuote",
-    legacy: "/microtick/Deposit"
-  },
-  withdraw: {
-    proto: "/microtick.msg.TxWithdrawQuote",
-    legacy: "/microtick/Withdraw"
-  },
-  update: {
-    proto: "/microtick.msg.TxUpdateQuote",
-    legacy: "/microtick/Update"
-  },
-  trade: {
-    proto: "/microtick.msg.TxMarketTrade",
-    legacy: "/microtick/Trade"
-  },
-  pick: {
-    proto: "/microtick.msg.TxPickTrade",
-    legacy: "/microtick/Pick"
-  },
-  settle: {
-    proto: "/microtick.msg.TxSettleTrade",
-    legacy: "/microtick/Settle"
-  }
+  cancel: "microtick/Cancel",
+  create: "microtick/Create",
+  deposit: "/microtick/Deposit",
+  withdraw: "/microtick/Withdraw",
+  update: "/microtick/Update",
+  trade: "/microtick/Trade",
+  pick: "/microtick/Pick",
+  settle: "/microtick/Settle"
 }
 
 export class TxFactory {
@@ -63,52 +37,12 @@ export class TxFactory {
     }
     
     tx.msgs.push({
-      type: txlookup[this.type].legacy,
+      type: txlookup[this.type],
       value: payload
     })
   
     // Canonicalize object
     return this._canonicalize(tx, this.chainId, this.account, this.sequence)
-  }
-  
-  publish(payload, pubkey, sig) {
-    const tx = {
-      body: {
-        messages: [],
-      },
-      authInfo: {
-        signerInfos: [],
-        fee: {
-          gasLimit: {
-            low: this.gas,
-          }
-        }
-      }
-    }
-    
-    tx.body.messages.push(Object.assign({
-      "@type": txlookup[this.type].proto,
-    }, payload))
-    
-    // add signer info
-    const si = {
-      publicKey: {
-        '@type': "/cosmos.crypto.secp256k1.PubKey",
-        key: pubkey
-      },
-      modeInfo: {
-        single: {
-          mode: "SIGN_MODE_LEGACY_AMINO_JSON"
-        }
-      }
-    }
-    tx.authInfo.signerInfos.push(si)
-  
-    // add signature
-    tx.signatures = [ sig ]
-  
-    const txmsg = codec.create("cosmos.tx.v1beta1.Tx", tx)
-    return txmsg
   }
   
   _canonicalize(jsonTx, chain, account, sequence) {

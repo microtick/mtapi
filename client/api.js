@@ -1,4 +1,5 @@
 import websocket from 'websocket'
+import bech32 from 'bech32'
 
 import protocol from '../lib/protocol.js'
 import { SoftwareSigner, LedgerSigner } from './signers.js'
@@ -244,10 +245,12 @@ class MTAPI {
     return response.info
   }
   
-  async getOrderbookInfo(market, dur) {
+  async getOrderbookInfo(market, dur, offset, limit) {
     const response = await this.protocol.newMessage('getorderbookinfo', {
       market: market,
-      duration: dur
+      duration: dur,
+      offset: offset,
+      limit: limit
     })
     if (!response.status) {
       throw new Error("Get order book info: " + response.error)
@@ -361,7 +364,7 @@ class MTAPI {
   
   // Transactions
   
-  async signAndBroadcast(factory, payload, protoChanges) {
+  async signAndBroadcast(factory, payload, gas) {
     // get account auth
     const response = await this.protocol.newMessage('getauthinfo', {
       acct: this.signer.address
@@ -371,19 +374,33 @@ class MTAPI {
     }
     const auth = response.info
     
-    console.log("Auth=" + JSON.stringify(auth, null, 2))
-    
     // sign and publish tx
     const tx = factory.build(payload, auth.chainid, auth.account, auth.sequence)
     const sig = await this.signer.sign(tx)
-    const res = factory.publish(Object.assign(payload, protoChanges), this.signer.getPubKey(), sig)
+    
+    // change address to bytes for (requester, taker, or provider fields)
+    if (payload.provider !== undefined) {
+      const decoded = bech32.decode(payload.provider)
+      payload.provider = Buffer.from(bech32.fromWords(decoded.words)).toString('base64')
+    }
+    if (payload.requester !== undefined) {
+      const decoded = bech32.decode(payload.requester)
+      payload.requester = Buffer.from(bech32.fromWords(decoded.words)).toString('base64')
+    }
+    if (payload.taker !== undefined) {
+      const decoded = bech32.decode(payload.taker)
+      payload.taker = Buffer.from(bech32.fromWords(decoded.words)).toString('base64')
+    }
     
     // post tx
     const sequence = auth.sequence++
     const post_result = await this.protocol.newMessage('posttx', {
-      tx: res.toString("base64"),
+      type: factory.type,
+      tx: payload,
+      pubkey: this.signer.getPubKey(),
+      sig: sig,
+      gas: gas,
       sequence: sequence,
-      type: factory.type
     })
     if (!post_result.status) {
       throw new Error("Post Tx: " + post_result.error)
@@ -405,28 +422,82 @@ class MTAPI {
       bid: bid
     }
     const factory = new TxFactory("create", 500000)
-    return await this.signAndBroadcast(factory, payload, { provider: this.signer.getAddressBytes() })
+    return await this.signAndBroadcast(factory, payload, 500000)
   }
   
   async cancelQuote(id) {
+    const payload = {
+      id: id,
+      requester: this.signer.getAddress()
+    }
+    const factory = new TxFactory("cancel", 500000)
+    return await this.signAndBroadcast(factory, payload, 500000)
   }
   
   async depositQuote(id, deposit) {
+    const payload = {
+      id: id,
+      requester: this.signer.getAddress(),
+      deposit: deposit
+    }
+    const factory = new TxFactory("deposit", 500000)
+    return await this.signAndBroadcast(factory, payload, 500000)
   }
   
   async withdrawQuote(id, withdraw) {
+    const payload = {
+      id: id,
+      requester: this.signer.getAddress(),
+      withdraw: withdraw
+    }
+    const factory = new TxFactory("withdrawt", 500000)
+    return await this.signAndBroadcast(factory, payload, 500000)
   }
   
   async updateQuote(id, newspot, newask, newbid) {
+    if (newbid === undefined) {
+      newbid = "0premium"
+    }
+    const payload = {
+      id: id,
+      requester: this.signer.getAddress(),
+      newSpot: newspot,
+      newAsk: newask,
+      newBid: newbid
+    }
+    const factory = new TxFactory("update", 500000)
+    return await this.signAndBroadcast(factory, payload, 500000)
   }
   
   async marketTrade(market, duration, ordertype, quantity) {
+    const payload = {
+      market: market,
+      duration: duration,
+      taker: this.signer.getAddress(),
+      orderType: ordertype,
+      quantity: quantity
+    }
+    const factory = new TxFactory("trade", 500000)
+    return await this.signAndBroadcast(factory, payload, 500000)
   }
   
   async pickTrade(id, ordertype) {
+    const payload = {
+      id: id,
+      taker: this.signer.getAddress(),
+      orderType: ordertype
+    }
+    const factory = new TxFactory("pick", 500000)
+    return await this.signAndBroadcast(factory, payload, 500000)
   }
   
   async settleTrade(id) {
+    const payload = {
+      id: id,
+      requester: this.signer.getAddress()
+    }
+    const factory = new TxFactory("settle", 500000)
+    return await this.signAndBroadcast(factory, payload, 500000)
   }
   
 }
