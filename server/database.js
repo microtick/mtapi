@@ -28,7 +28,7 @@ const mongo_reconnect = async url => {
 
 setInterval(() => {
   do_mongo_reconnect = true
-}, 300000) // close and flag reconnect every 5 minutes
+}, 300000) // close and flag reconnect every 15 minutes
 // HACK: mongo driver appears to have a memory leak
   
 const DB = {
@@ -242,7 +242,7 @@ const DB = {
     })
   },
   
-  insertQuote: async (height, id, hash, provider, market, duration, spot, backing, ask, bid) => {
+  insertQuote: async (height, id, hash, provider, market, duration, spot, backing, ask, bid, commission, reward, adjustment) => {
     await db.collection('quotes').insertOne({
       height: height,
       type: "create",
@@ -252,7 +252,10 @@ const DB = {
       backing: backing,
       spot: spot,
       ask: ask,
-      bid: bid
+      bid: bid,
+      commission: commission,
+      reward: reward,
+      adjustment: adjustment
     })
     await db.collection('books').insertOne({
       id: id,
@@ -265,7 +268,7 @@ const DB = {
     })
   },
   
-  updateQuoteBacking: async (height, id, hash, remainBacking, ref) => {
+  updateQuoteBacking: async (height, id, hash, remainBacking, ref, commission, reward, adjustment) => {
     await db.collection('books').updateOne({
       id: id
     }, {
@@ -279,11 +282,14 @@ const DB = {
       ref: ref,
       id: id,
       hash: hash,
-      backing: remainBacking
+      backing: remainBacking,
+      commission: commission,
+      reward: reward,
+      adjustment: adjustment
     })
   },
   
-  updateQuoteParams: async (height, id, hash, newSpot, newAsk, newBid) => {
+  updateQuoteParams: async (height, id, hash, newSpot, newAsk, newBid, commission, reward, adjustment) => {
     await db.collection('books').updateOne({
       id: id
     }, {
@@ -301,23 +307,27 @@ const DB = {
       hash: hash,
       spot: newSpot,
       ask: newAsk,
-      bid: newBid
+      bid: newBid,
+      commission: commission,
+      reward: reward,
+      adjustment: adjustment
     })
   },
   
-  removeQuote: async (height, hash, id, ref) => {
+  removeQuote: async (height, hash, id, ref, commission) => {
     await db.collection('books').deleteOne({ id: id })
     await db.collection('quotes').insertOne({
       height: height,
       hash: hash,
       id: id,
       type: "final",
-      ref: ref
+      ref: ref,
+      commission: commission
     })
   },
   
-  insertTrade: async (height, id, legid, hash, market, duration, type, strike, start, expiration, premium, backing, quantity, 
-    long, short) => {
+  insertTrade: async (height, id, legid, hash, market, duration, type, strike, start, expiration, 
+    premium, quantity, cost, backing, long, short) => {
     await db.collection('trades').insertOne({
       height: height,
       id: id,
@@ -330,8 +340,9 @@ const DB = {
       start: start,
       expiration: expiration,
       premium: premium,
-      backing: backing,
       quantity: quantity,
+      cost: cost,
+      backing: backing,
       long: long,
       short: short,
       active: true

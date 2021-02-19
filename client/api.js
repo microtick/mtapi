@@ -1,16 +1,17 @@
 import websocket from 'websocket'
 import bech32 from 'bech32'
+import { Mutex } from 'async-mutex'
 
 import protocol from '../lib/protocol.js'
 import { SoftwareSigner, LedgerSigner } from './signers.js'
 import { TxFactory } from './transactions.js'
 
-export { MTAPI, SoftwareSigner, LedgerSigner }
+export { MTAPI as default, SoftwareSigner, LedgerSigner }
 
 class MTAPI {
     
-  constructor(signer) {
-    this.signer = signer
+  constructor() {
+    this.sequenceMutex = new Mutex()
     
     this.subscriptions = {}
     this.blockHandlers = []
@@ -53,16 +54,30 @@ class MTAPI {
         case "1day": return 86400
       }
     }
-    
   }
   
-  async init(url) {
+  setUrl(url) {
+    this.url = url
+  }
+  
+  setSigner(signer) {
+    this.signer = signer
+  }
+  
+  async init() {
     console.log("Initializing API")
+    
+    if (this.url === undefined) {
+      throw new Error("API url is undefined")
+    }
+    if (this.signer === undefined) {
+      throw new Error("no signer defined")
+    }
 
     await new Promise((res, rej) => {
       try {
-        this._connectServer(url, async () => {
-          console.log("Wallet address: " + this.signer.address)
+        this._connectServer(this.url, async () => {
+          console.log("Signer address: " + this.signer.address)
           const response = await this.protocol.newMessage('connect', {
             acct: this.signer.address
           })
@@ -169,8 +184,12 @@ class MTAPI {
     this.accountHandlers.push(handler)
   }
   
-  getMarkets() {
-    return this.markets
+  async getMarkets() {
+    const response = await this.protocol.newMessage('getmarkets')
+    if (!response.status) {
+      throw new Error("Get markets: " + response.error)
+    }
+    return response.info
   }
   
   getDurations() {
@@ -211,6 +230,14 @@ class MTAPI {
     const response = await this.protocol.newMessage('getparams')
     if (!response.status) {
       throw new Error("Get params: " + response.error)
+    }
+    return response.info
+  }
+  
+  async getBlockInfo() {
+    const response = await this.protocol.newMessage('getblock')
+    if (!response.status) {
+      throw new Error("Get account info: " + response.error)
     }
     return response.info
   }
@@ -368,21 +395,40 @@ class MTAPI {
   
   // Transactions
   
-  async signAndBroadcast(factory, payload) {
-    // get account auth
-    const response = await this.protocol.newMessage('getauthinfo', {
-      acct: this.signer.address
-    })
-    if (!response.status) {
-      throw new Error("Account not found: please add funds and try again")
+  async signAndBroadcast(factory, payload, auth) {
+    if (auth === undefined) {
+      // For simultaneous tx requests, we use a mutex so the resulting
+      // sequence numbers will be sequential
+      await this.sequenceMutex.runExclusive(async () => {
+        // if we don't have this.auth, fetch it
+        if (this.auth === undefined) {
+          // get account auth
+          const response = await this.protocol.newMessage('getauthinfo', {
+            acct: this.signer.address
+          })
+          if (!response.status) {
+            throw new Error("Account not found: please add funds and try again")
+          }
+          this.auth = response.info
+        }
+      })
+      var chainid = this.auth.chainid
+      var account = this.auth.account
+      var sequence = this.auth.sequence++
+    } else {
+      // If the caller specified their own auth, just use those values
+      chainid = auth.chainid
+      account = auth.account
+      sequence = auth.sequence
     }
-    const auth = response.info
     
     // sign and publish tx
-    const tx = factory.build(payload, auth.chainid, auth.account, auth.sequence)
+    const tx = factory.build(payload, chainid, account, sequence)
+    //console.log(JSON.stringify(tx, null, 2))
     const sig = await this.signer.sign(tx)
     
     // change address to bytes for (requester, taker, or provider fields)
+    // (note these do not overlap anything for cosmos-sdk packets we support so this is ok, for now)
     if (payload.provider !== undefined) {
       const decoded = bech32.decode(payload.provider)
       payload.provider = Buffer.from(bech32.fromWords(decoded.words)).toString('base64')
@@ -397,8 +443,7 @@ class MTAPI {
     }
     
     // post tx
-    const sequence = auth.sequence++
-    const txreq = {
+    const packet = {
       type: factory.type,
       tx: payload,
       pubkey: this.signer.getPubKey(),
@@ -407,7 +452,11 @@ class MTAPI {
       sequence: sequence,
     }
     
-    const post_result = await this.protocol.newMessage('posttx', txreq)
+    if (auth !== undefined) {
+      packet.chainid = chainid
+    }
+    
+    const post_result = await this.protocol.newMessage('posttx', packet)
     if (!post_result.status) {
       throw new Error("Post Tx: " + post_result.error)
     }
@@ -509,6 +558,56 @@ class MTAPI {
       requester: this.signer.getAddress()
     }
     const factory = new TxFactory("settle")
+    return await this.signAndBroadcast(factory, payload)
+  }
+  
+  // IBC
+  
+  async getIBCEndpoints() {
+    const response = await this.protocol.newMessage('getibcinfo', {
+      pubkey: this.signer.getPubKey()
+    })
+    if (!response.status) {
+      throw new Error("Get IBC endpoints: " + response.error)
+    }
+    return response.info
+  }
+  
+  async IBCDeposit(channel, height, blocktime, sender, receiver, amount, denom, auth) {
+    const payload = {
+      source_port: "transfer",
+      source_channel: channel,
+      token: {
+        amount: amount,
+        denom: denom
+      },
+      sender: sender,
+      receiver: receiver,
+      timeout_height: {
+        revision_height: '' + height
+      },
+      timeout_timestamp: '' + blocktime + "000000"
+    }
+    const factory = new TxFactory("transfer")
+    return await this.signAndBroadcast(factory, payload, auth)
+  }
+  
+  async IBCWithdrawal(channel, height, blocktime, sender, receiver, amount, denom) {
+    const payload = {
+      source_port: "transfer",
+      source_channel: channel,
+      token: {
+        amount: amount,
+        denom: denom
+      },
+      sender: sender,
+      receiver: receiver,
+      timeout_height: {
+        revision_height: '' + height
+      },
+      timeout_timestamp: '' + blocktime + "000000"
+    }
+    const factory = new TxFactory("transfer")
     return await this.signAndBroadcast(factory, payload)
   }
   

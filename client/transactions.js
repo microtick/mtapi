@@ -6,7 +6,8 @@ const txlookup = {
   update: "microtick/Update",
   trade: "microtick/Trade",
   pick: "microtick/Pick",
-  settle: "microtick/Settle"
+  settle: "microtick/Settle",
+  transfer: "cosmos-sdk/MsgTransfer"
 }
 
 export class TxFactory {
@@ -20,8 +21,8 @@ export class TxFactory {
     }
   }
   
-  build(payload, chainId, account, sequence) {
-    this.chainId = chainId
+  build(payload, chainid, account, sequence) {
+    this.chainid = chainid
     // make strings
     this.account = "" + account
     this.sequence = "" + sequence
@@ -42,7 +43,7 @@ export class TxFactory {
     })
   
     // Canonicalize object
-    return this._canonicalize(tx, this.chainId, this.account, this.sequence)
+    return this._canonicalize(tx, this.chainid, this.account, this.sequence)
   }
   
   _canonicalize(jsonTx, chain, account, sequence) {

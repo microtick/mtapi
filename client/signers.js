@@ -1,5 +1,5 @@
 import bip32 from 'bip32'
-import bip39 from 'bip39'
+import * as bip39 from 'bip39'
 import cryptojs from 'crypto-js'
 import ripemd160 from 'crypto-js/ripemd160.js'
 import secp256k1 from 'secp256k1'

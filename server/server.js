@@ -4,6 +4,9 @@ const ws = require('ws')
 const axios = require('axios')
 const objecthash = require('object-hash')
 const crypto = require('crypto')
+const cryptojs = require('crypto-js')
+const ripemd160 = require('crypto-js/ripemd160')
+const sha256 = require('js-sha256')
 const bech32 = require('bech32')
 const BN = require('bignumber.js')
 
@@ -21,8 +24,9 @@ const LOG_API = false
 const LOG_TX = false
 const LOG_TRANSFERS = false
 
+var chainid_mapping = {}
 var chainid = null
-
+ 
 if (USE_DATABASE) {
   var db = require('./database.js')
 }
@@ -51,16 +55,20 @@ const globals = {
 
 // ABCI calls to Tendermint and REST
 
-const queryTendermint = async url => {
-  const query = "http://" + config.tendermint + url
+const queryTendermint = async (url, tendermint=config.tendermint) => {
+  const query = "http://" + tendermint + url
   const res = await axios.get(query)
   return res.data.result
 }
 
-const queryRest = async url => {
-  const query = "http://" + config.rest + url
-  const res = await axios.get(query)
-  return res.data.result
+const queryRest = async (url, rest=config.rest) => {
+  try {
+    const query = "http://" + rest + url
+    const res = await axios.get(query)
+    return res.data.result
+  } catch (err) {
+    return {}
+  }
 }
 
 // API query caching
@@ -161,8 +169,8 @@ const dump_subscriptions = () => {
     })
   }
   const keys = Object.keys(marketSubscriptions)
-  console.log(keys.length + " Market Subscription(s):")
   if (keys.length > 0) {
+    console.log("Market Subscription(s):")
     keys.map(key => {
       if (marketSubscriptions[key].length > 0) {
         console.log("  " + key + " => " + JSON.stringify(marketSubscriptions[key]))
@@ -259,6 +267,10 @@ const sendAccountEvent = (acct, event, payload) => {
   }
 }
 
+/*
+// Before REST turned on - GRPC query example
+// equivalent to queryRest("/auth/accounts/" + acct)
+//
 const queryAuthAccount  = async acct => {
   const query = codec.create("cosmos.auth.v1beta1.QueryAccountRequest", { address: acct })
   const data = {
@@ -274,23 +286,24 @@ const queryAuthAccount  = async acct => {
   }
   const res = await axios.post("http://" + config.tendermint, data)
   if (res.data.result.response.code !== 0) {
-    throw new Error(res.data.result.response.log)
+    throw new Error("Account not found")
   }
   const buf = Buffer.from(res.data.result.response.value, 'base64')
   return codec.decode("cosmos.auth.v1beta1.QueryAccountResponse", buf, true)
 }
+*/
 
 const updateAccountBalance = async (height, hash, acct, denom, amount) => {
   if (globals.account_cache[acct] === undefined) {
-    let res = await queryAuthAccount(acct)
-    if (res.account["@type"] === "/cosmos.auth.v1beta1.ModuleAccount") {
+    let res = await queryRest("/auth/accounts/" + acct)
+    if (res.type === "cosmos-sdk/ModuleAccount") {
       globals.account_cache[acct] = {
-        name: res.account.name,
+        name: res.value.name,
         module: true
       }
     } else {
       globals.account_cache[acct] = {
-        name: res.account.address,
+        name: res.value.address,
         module: false
       }
     }
@@ -300,13 +313,13 @@ const updateAccountBalance = async (height, hash, acct, denom, amount) => {
       const value = hash.split(":")
       const lookup = value[1]
       if (globals.account_cache[lookup] === undefined) {
-        let res = await queryAuthAccount(acct)
-        if (res.account["@type"] === "/cosmos.auth.v1beta1.ModuleAccount") {
+        let res = await queryRest("/auth/accounts/" + acct)
+        if (res.type === "cosmos-sek/ModuleAccount") {
           globals.account_cache[acct] = {
-            name: res.account.name,
+            name: res.value.name,
             module: true
           }
-          hash = res.account.name
+          hash = res.value.name
         } else {
           hash = "blocktx"
         }
@@ -403,14 +416,15 @@ const processBlock = async (height) => {
   console.log("Block " + block.height + ": txs=" + num_txs + " pending=" + hashes.length)
   
   if (!syncing) {
-    broadcastBlock({
+    this.latestBlock = {
       height: block.height,
       time: block.time,
       hash: block.block.header.last_block_id.hash,
       chainid: chainid
-    })
+    }
+    broadcastBlock(this.latestBlock)
     dump_subscriptions()
-    console.log("Events:")
+    console.log("Block Events:")
   }
   
   
@@ -431,7 +445,7 @@ const processBlock = async (height) => {
           if (LOG_TX) {
             console.log("  hash " + hash + " successful")
           }
-          pending[hash].success({ tx_result: txr, height: block.height, hash: hash })
+          pending[hash].success({ height: block.height, hash: hash })
         }
         delete pending[hash]
       }
@@ -455,10 +469,13 @@ const processBlock = async (height) => {
             if (event.type === "message") {
               for (var attr = 0; attr < event.attributes.length; attr++) {
                 const a = event.attributes[attr]
-                //const key = Buffer.from(a.key, 'base64').toString()
-                //const value = Buffer.from(a.value, 'base64').toString()
-                const key = a.key
-                const value = a.value
+                if (a.index) {
+                  var key = Buffer.from(a.key, 'base64').toString()
+                  var value = Buffer.from(a.value, 'base64').toString()
+                } else {
+                  key = a.key
+                  value = a.value
+                }
                 txstruct.events[key] = value
               }
             }
@@ -490,6 +507,8 @@ const processBlock = async (height) => {
           })
           
           //console.log("Result " + txstruct.module + " / " + txstruct.action + ": hash=" + shortHash(hash))
+          //console.log(JSON.stringify(txstruct.events))
+          
           if (txstruct.events.module === "microtick") {
             await processMicrotickTx(block, txstruct)
           } 
@@ -564,8 +583,8 @@ const convertTradeResultToObj = trade => {
   const obj = {}
   obj.id = trade.id
   obj.quantity = convertCoin(trade.quantity, "1e18").amount
-  obj.start = trade.start
-  obj.expiration = trade.expiration
+  obj.start = parseInt(trade.start)
+  obj.expiration = parseInt(trade.expiration)
   obj.strike = convertCoin(trade.strike, "1e18").amount
   obj.commission = convertCoin(trade.commission, "1e18").amount
   obj.settleIncentive = convertCoin(trade.settleIncentive, "1e18").amount
@@ -588,7 +607,6 @@ const convertTradeResultToObj = trade => {
 }
 
 const processMicrotickTx = async (block, txstruct) => {
-  console.log("processMicrotickTx")
   const tx = txstruct.tx
   if (tx.result !== undefined) {
     tx.result.height = block.height
@@ -606,7 +624,7 @@ const processMicrotickTx = async (block, txstruct) => {
     case "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxCancelQuote":
       var data = codec.decode(PROTOBUF_MICROTICK_PACKAGE + ".CancelQuoteData", Buffer.from(result.data, 'base64'), true)
       item.type = "cancel"
-      item.time = data.time
+      item.time = parseInt(data.time) * 1000
       item.id = payload.id
       item.hash = txstruct.hash
       item.requester = bech32.encode("micro", bech32.toWords(Buffer.from(payload.requester, "base64")))
@@ -621,7 +639,7 @@ const processMicrotickTx = async (block, txstruct) => {
     case "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxCreateQuote":
       data = codec.decode(PROTOBUF_MICROTICK_PACKAGE + ".CreateQuoteData", Buffer.from(result.data, 'base64'), true)
       item.type = "create"
-      item.time = data.time
+      item.time = parseInt(data.time) * 1000
       item.id = data.id
       item.hash = txstruct.hash
       item.provider = bech32.encode("micro", bech32.toWords(Buffer.from(payload.provider, "base64")))
@@ -634,11 +652,12 @@ const processMicrotickTx = async (block, txstruct) => {
       item.consensus = convertCoin(data.consensus, "1e18").amount
       item.commission = convertCoin(data.commission, "1e18").amount
       item.reward = convertCoin(data.reward, "1e6").amount
+      item.adjustment = parseFloat(data.adjustment)
       break
     case "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxDepositQuote":
       data = codec.decode(PROTOBUF_MICROTICK_PACKAGE + ".DepositQuoteData", Buffer.from(result.data, 'base64'), true)
       item.type = "deposit"
-      item.time = data.time
+      item.time = parseInt(data.time) * 1000
       item.id = payload.id
       item.hash = txstruct.hash
       item.requester = bech32.encode("micro", bech32.toWords(Buffer.from(payload.requester, "base64")))
@@ -649,11 +668,12 @@ const processMicrotickTx = async (block, txstruct) => {
       item.backing = convertCoin(data.backing, "1e18").amount
       item.commission = convertCoin(data.commission, "1e18").amount
       item.reward = convertCoin(data.reward, "1e6").amount
+      item.adjustment = parseFloat(data.adjustment)
       break
     case "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxPickTrade":
       data = codec.decode(PROTOBUF_MICROTICK_PACKAGE + ".PickTradeData", Buffer.from(result.data, 'base64'), true)
       item.type = "pick"
-      item.time = data.time
+      item.time = parseInt(data.time) * 1000
       item.hash = txstruct.hash
       item.taker = bech32.encode("micro", bech32.toWords(Buffer.from(payload.taker, "base64")))
       item.order = payload.orderType
@@ -667,7 +687,7 @@ const processMicrotickTx = async (block, txstruct) => {
     case "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxSettleTrade":
       data = codec.decode(PROTOBUF_MICROTICK_PACKAGE + ".SettleTradeData", Buffer.from(result.data, 'base64'), true)
       item.type = "settle"
-      item.time = data.time
+      item.time = parseInt(data.time) * 1000
       item.id = data.id
       item.hash = txstruct.hash
       item.settler = bech32.encode("micro", bech32.toWords(Buffer.from(data.settler, "base64")))
@@ -688,7 +708,7 @@ const processMicrotickTx = async (block, txstruct) => {
     case "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxMarketTrade":
       data = codec.decode(PROTOBUF_MICROTICK_PACKAGE + ".MarketTradeData", Buffer.from(result.data, 'base64'), true)
       item.type = "trade"
-      item.time = data.time
+      item.time = parseInt(data.time) * 1000
       item.hash = txstruct.hash
       item.taker = bech32.encode("micro", bech32.toWords(Buffer.from(payload.taker, "base64")))
       item.order = payload.orderType
@@ -702,7 +722,7 @@ const processMicrotickTx = async (block, txstruct) => {
     case "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxUpdateQuote":
       data = codec.decode(PROTOBUF_MICROTICK_PACKAGE + ".UpdateQuoteData", Buffer.from(result.data, 'base64'), true)
       item.type = "update"
-      item.time = data.time
+      item.time = parseInt(data.time) * 1000
       item.id = payload.id
       item.hash = txstruct.hash
       item.requester = bech32.encode("micro", bech32.toWords(Buffer.from(payload.requester, "base64")))
@@ -714,11 +734,12 @@ const processMicrotickTx = async (block, txstruct) => {
       item.consensus = convertCoin(data.consensus, "1e18").amount
       item.commission = convertCoin(data.commission, "1e18").amount
       item.reward = convertCoin(data.reward, "1e6").amount
+      item.adjustment = parseFloat(data.adjustment)
       break
     case "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxWithdrawQuote":
       data = codec.decode(PROTOBUF_MICROTICK_PACKAGE + ".WithdrawQuoteData", Buffer.from(result.data, 'base64'), true)
       item.type = "withdraw"
-      item.time = data.time
+      item.time = parseInt(data.time) * 1000
       item.id = payload.id
       item.hash = txstruct.hash
       item.requester = bech32.encode("micro", bech32.toWords(Buffer.from(payload.requester, "base64")))
@@ -750,11 +771,28 @@ const processMicrotickTx = async (block, txstruct) => {
     if (item.type === "create") {
       if (USE_DATABASE) {
         db.insertQuote(txstruct.height, item.id, item.hash, item.provider, item.market, item.duration,
-          item.spot, item.backing, item.ask, item.bid)
+          item.spot, item.backing, item.ask, item.bid, item.commission, item.reward, item.adjustment)
       }
       sendAccountEvent(item.provider, "create", {
         hash: item.hash,
-        quote: item.id
+        quote: item.id,
+        commission: item.commission,
+        reward: item.reward,
+        adjustment: item.adjustment
+      })
+    }
+    
+    if (item.type === "update") {
+      if (USE_DATABASE) {
+        db.updateQuoteParams(txstruct.height, item.id, item.hash, item.spot, item.ask, item.bid, 
+          item.commission, item.reward, item.adjustment)
+      }
+      sendAccountEvent(item.requester, "update", {
+        hash: item.hash,
+        quote: item.id,
+        commission: item.commission,
+        reward: item.reward,
+        adjustment: item.adjustment
       })
     }
     
@@ -762,18 +800,21 @@ const processMicrotickTx = async (block, txstruct) => {
       item.trade.legs.map(leg => {
         if (USE_DATABASE) {
           db.insertTrade(txstruct.height, item.trade.id, leg.legId, item.hash, item.market, item.duration,
-            leg.type, item.trade.strike, item.trade.start, item.trade.expiration, leg.premium, leg.backing, 
-            leg.quantity, leg.long, leg.short)
+            leg.type, item.trade.strike, item.trade.start, item.trade.expiration, leg.premium, leg.quantity,
+            leg.cost, leg.backing, leg.long, leg.short)
           if (leg.final) {
-            db.removeQuote(txstruct.height, item.hash, leg.quoteId, "trade")
+            db.removeQuote(txstruct.height, item.hash, leg.quoteId, item.type, 0)
           } else {
-            db.updateQuoteBacking(txstruct.height, leg.quoteId, item.hash, leg.remainBacking, item.type)
+            db.updateQuoteBacking(txstruct.height, leg.quoteId, item.hash, leg.remainBacking, item.type, 
+              item.commission, item.reward, 1)
           }
         }
         sendAccountEvent(item.taker, "taker", {
           hash: item.hash,
           trade: item.trade.id,
-          leg: leg.legId
+          leg: leg.legId,
+          commission: item.commission,
+          reward: item.reward
         })
         if (leg.long === item.taker) {
           sendAccountEvent(leg.short, "maker", {
@@ -811,33 +852,40 @@ const processMicrotickTx = async (block, txstruct) => {
       })
     }
     
-    if (item.type === "update") {
+    if (item.type === "deposit") {
       if (USE_DATABASE) {
-        db.updateQuoteParams(item.id, item.hash, item.spot, item.ask, item.bid)
+        db.updateQuoteBacking(txstruct.height, item.id, item.hash, item.backing, item.type, item.commission,
+          item.reward, item.adjustment)
       }
       sendAccountEvent(item.requester, "update", {
         hash: item.hash,
-        quote: item.id
+        quote: item.id,
+        commission: item.commission,
+        reward: item.reward,
+        adjustment: item.adjustment
       })
     }
     
-    if (item.type === "deposit" || item.type === "withdraw") {
+    if (item.type === "withdraw") {
       if (USE_DATABASE) {
-        db.updateQuoteBacking(txstruct.height, item.id, item.hash, item.backing, item.type)
+        db.updateQuoteBacking(txstruct.height, item.id, item.hash, item.backing, item.type, item.commission,
+          0, 0)
       }
       sendAccountEvent(item.requester, "update", {
         hash: item.hash,
-        quote: item.id
+        quote: item.id,
+        commission: item.commission
       })
     }
     
     if (item.type === "cancel") {
       if (USE_DATABASE) {
-        db.removeQuote(txstruct.height, item.hash, item.id, "cancel")
+        db.removeQuote(txstruct.height, item.hash, item.id, "cancel", item.commission)
       }
       sendAccountEvent(item.account, "cancel", {
         hash: item.hash,
-        id: item.id
+        id: item.id,
+        commission: item.commission
       })
     }
   }
@@ -851,7 +899,8 @@ const txlookup = {
   update: "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxUpdateQuote",
   trade: "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxMarketTrade",
   pick: "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxPickTrade",
-  settle: "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxSettleTrade"
+  settle: "/" + PROTOBUF_MICROTICK_PACKAGE + ".TxSettleTrade",
+  transfer: "/ibc.applications.transfer.v1.MsgTransfer"
 }
 
 const publish = (type, payload, pubkey, sig, gas) => {
@@ -871,20 +920,26 @@ const publish = (type, payload, pubkey, sig, gas) => {
   
   // convert non_camel_case keys to camelCase (incompatibility in protobufjs library
   // that doesn't honor the gogoproto.jsontag attribute)
-  const keys = Object.keys(payload)
-  keys.map(key => {
-    const ary = key.split("_")
-    if (ary.length > 1) {
-      let camel = ary[0]
-      for (var i=1; i<ary.length; i++) {
-        const syllable = ary[i]
-        camel = camel + syllable.substring(0, 1).toUpperCase() + syllable.substring(1)
+  function doRecursiveCamelCase(obj) {
+    const keys = Object.keys(obj)
+    keys.map(key => {
+      const ary = key.split("_")
+      if (ary.length > 1) {
+        let camel = ary[0]
+        for (var i=1; i<ary.length; i++) {
+          const syllable = ary[i]
+          camel = camel + syllable.substring(0, 1).toUpperCase() + syllable.substring(1)
+        }
+        //console.log("Substituting " + key + " with " + camel)
+        obj[camel] = obj[key]
+        delete obj[key]
+        if (typeof obj[camel] === 'object') {
+          doRecursiveCamelCase(obj[camel])
+        }
       }
-      //console.log("Substituting " + key + " with " + camel)
-      payload[camel] = payload[key]
-      delete payload[key]
-    }
-  })
+    })
+  }
+  doRecursiveCamelCase(payload)
   
   tx.body.messages.push(Object.assign({
     "@type": txlookup[type],
@@ -907,7 +962,6 @@ const publish = (type, payload, pubkey, sig, gas) => {
   // add signature
   tx.signatures = [ sig ]
   
-  //console.log(JSON.stringify(tx, null, 2))
   const txmsg = codec.create("cosmos.tx.v1beta1.Tx", tx)
   return txmsg.toString("base64")
 }
@@ -1067,20 +1121,43 @@ const handleMessage = async (env, name, payload) => {
         }
         
       // Queries
+      case 'getblock':
+        returnObj = {
+          status: true,
+          info: this.latestBlock
+        }
+        break
       case 'getparams':
         res = await queryRest("/microtick/params")
         returnObj = {
           status: true,
           info: {
-            commissionQuotePercent: parseFloat(res.commission_quote_percent),
+            commissionCreatePerunit: parseFloat(res.commission_create_perunit),
+            commissionUpdatePerunit: parseFloat(res.commission_update_perunit),
             commissionTradeFixed: parseFloat(res.commission_trade_fixed),
-            commissionUpdatePercent: parseFloat(res.commission_update_percent),
+            commissionUpdatePerunit: parseFloat(res.commission_update_perunit),
             commissionSettleFixed: parseFloat(res.commission_settle_fixed),
-            commissionCancelPercent: parseFloat(res.commission_cancel_percent),
+            commissionCancelPerunit: parseFloat(res.commission_cancel_perunit),
+            mintRewardCreatePerunit: parseFloat(res.mint_reward_create_perunit),
+            mintRewardUpdatePerunit: parseFloat(res.mint_reward_update_perunit),
+            mintRewardTradeFixed: parseFloat(res.mint_reward_trade_fixed),
+            mintRewardSettleFixed: parseFloat(res.mint_reward_settle_fixed),
             settleIncentive: parseFloat(res.settle_incentive),
             mintRatio: parseFloat(res.mint_ratio),
             backingDenom: res.backing_denom
           }
+        }
+        break
+      case 'getmarkets':
+        res = await db.queryMarkets()
+        returnObj = {
+          status: true,
+          info: res.map(m => {
+            return {
+              name: m.name,
+              description: m.description
+            }
+          })
         }
         break
       case 'getacctinfo':
@@ -1312,20 +1389,6 @@ const handleMessage = async (env, name, payload) => {
           throw new Error("Database turned off")
         }
         break
-      case 'accountsync':
-        if (USE_DATABASE) {
-          console.log("Sync requested: " + env.acct + " " + payload.startblock + ":" + payload.endblock)
-          res = await db.queryAccountHistory(env.acct, payload.startblock, payload.endblock)
-          res.map(ev => {
-            sendAccountEvent(env.acct, ev.type, ev.data)
-          })
-          returnObj = {
-            status: true
-          }
-        } else {
-          throw new Error("Database turned off")
-        }
-        break
       case 'accountledgersize':
         if (USE_DATABASE) {
           res = await db.queryAccountTotalEvents(env.acct)
@@ -1350,6 +1413,23 @@ const handleMessage = async (env, name, payload) => {
           throw new Error("Database turned off")
         }
         break
+        */
+      case 'accountsync':
+        if (USE_DATABASE) {
+          console.log("Sync requested: " + env.acct + " " + payload.startblock + ":" + payload.endblock)
+          /*
+          res = await db.queryAccountHistory(env.acct, payload.startblock, payload.endblock)
+          res.map(ev => {
+            sendAccountEvent(env.acct, ev.type, ev.data)
+          })
+          */
+          returnObj = {
+            status: true
+          }
+        } else {
+          throw new Error("Database turned off")
+        }
+        break
       case 'markethistory':
         if (USE_DATABASE) {
           res = await db.queryMarketHistory(payload.market, payload.startblock,
@@ -1361,21 +1441,21 @@ const handleMessage = async (env, name, payload) => {
         } else {
           throw new Error("Database turned off")
         }
-        */
         
       // Transactions
       
       case 'getauthinfo':
         // get the account number, sequence number
-        res = await queryAuthAccount(payload.acct)
+        res = await queryRest("/auth/accounts/" + payload.acct)
         return {
           status: true,
           info: {
             chainid: chainid,
-            account: res.account.accountNumber,
-            sequence: res.account.sequence !== undefined ? res.account.sequence : 0
+            account: res.value.account_number,
+            sequence: res.value.sequence !== undefined ? res.value.sequence : 0
           }
         }
+        
       case 'posttx':
         const publishTx = publish(payload.type, payload.tx, payload.pubkey, payload.sig, payload.gas)
         res = await new Promise(async (outerResolve, outerReject) => {
@@ -1385,10 +1465,11 @@ const handleMessage = async (env, name, payload) => {
             submit: async (acct) => {
               if (pendingTx.submitted) return
               try {
-                console.log("Posting [" + env.id + "] TX " + payload.type)
+                console.log("  Posting [" + env.id + "] TX " + payload.type)
                 pendingTx.submitted = true
 
-                const res = await axios.post('http://' + config.tendermint, {
+                const tendermint = payload.chainid !== undefined ? chainid_mapping[payload.chainid].tendermint : config.tendermint
+                const res = await axios.post('http://' + tendermint, {
                   jsonrpc: "2.0",
                   id: 1,
                   method: "broadcast_tx_commit",
@@ -1406,38 +1487,34 @@ const handleMessage = async (env, name, payload) => {
                   outerReject(new Error(res.data.result.check_tx.log))
                   console.error("  outer posttx promise failed: " + res.data.result.check_tx.log)
                   return
-                } else {
-                  if (LOG_TX) console.log("  hash=" + shortHash(res.data.result.hash))
                 }
-                const txres = await new Promise((resolve, reject) => {
-                  const obj = {
-                    success: txres => {
-                      resolve(txres)
-                    },
-                    failure: err => {
-                      console.error("  posttx transaction failed: " + err)
-                      reject(err)
-                    },
-                    timedout: false,
-                    tries: 0
-                  }
-                  setTimeout(() => {obj.timedout = true}, TXTIMEOUT)
-                  pending[res.data.result.hash] = obj
-                })
-                if (txres.tx_result.events !== undefined) {
-                  for (var i=0; i<txres.tx_result.events.length; i++) {
-                    var t = txres.tx_result.events[i]
-                    if (t.type === "message") {
-                      t.attributes = t.attributes.map(a => {
-                        return {
-                          key: Buffer.from(a.key, 'base64').toString(),
-                          value: Buffer.from(a.value, 'base64').toString()
-                        }
-                      })
+                if (LOG_TX) console.log("  hash=" + shortHash(res.data.result.hash))
+                
+                if (payload.chainid === undefined) {
+                  // if posted to the native microtick chain, wait for block with tx results
+                  // and return that
+                  const txres = await new Promise((resolve, reject) => {
+                    const obj = {
+                      success: txres => {
+                        resolve(txres)
+                      },
+                      failure: err => {
+                        console.error("  posttx transaction failed: " + err)
+                        reject(err)
+                      },
+                      timedout: false,
+                      tries: 0
                     }
-                  }
+                    setTimeout(() => {obj.timedout = true}, TXTIMEOUT)
+                    pending[res.data.result.hash] = obj
+                  })
+                  outerResolve(txres)
+                } else {
+                  // if posted to some other chain, it's IBC so just return the tx hash
+                  outerResolve({
+                    hash: res.data.result.hash
+                  })
                 }
-                outerResolve(txres)
               } catch (err) {
                 console.error("TX failed: " + acct + " sequence: " + payload.sequence)
                 outerReject(err)
@@ -1456,11 +1533,18 @@ const handleMessage = async (env, name, payload) => {
         })
         return {
           status: true,
-          info: {
-            height: res.height,
-            hash: res.hash
-          }
+          info: res
         }
+      
+      // IBC
+        
+      case 'getibcinfo':
+        const info = await collectIBCEndpoints(payload.pubkey)
+        returnObj = {
+          status: true,
+          info: info
+        }
+        break
     }
     
     // Save query in cache
@@ -1480,4 +1564,91 @@ const handleMessage = async (env, name, payload) => {
       error: err.message === undefined ? "Request failed" : err.message
     }
   }
+}
+
+const collectIBCEndpoints = async pubkey => {
+  const pubKeyBytes = Buffer.from(pubkey, 'base64')
+  const enc = cryptojs.enc.Hex.parse(sha256(pubKeyBytes).toString('hex'))
+  const hash = ripemd160(enc).toString()
+  const address = Buffer.from(hash, `hex`)
+  const words = bech32.toWords(address) 
+  
+  const endpoints = []
+  
+  for (var i=0; i<config.ibc.length; i++) {
+    const endpoint = config.ibc[i]
+    const address = bech32.encode(endpoint.prefix, words)
+    
+    //console.log(endpoint.name + ": " + address)
+    let ep = {
+      name: endpoint.name,
+      address: address
+    }
+    
+    // Define denominations
+    if (endpoint.incoming !== undefined) {
+      ep.incoming = endpoint.incoming
+      const denoms = endpoint.incoming_denom.split(":")
+      const ratio = endpoint.incoming_ratio.split(":")
+      ep.backingHere = "ibc/" + sha256("transfer/" + endpoint.incoming + "/" + denoms[0]).toUpperCase()
+      ep.backingThere = denoms[0]
+      ep.backingRatio = parseInt(ratio[0]) / parseInt(ratio[1])
+    }
+    
+    if (endpoint.outgoing !== undefined) {
+      ep.outgoing = endpoint.outgoing
+      ep.tickThere = "ibc/" + sha256("transfer/" + endpoint.outgoing + "/stake").toUpperCase()
+    }
+    
+    // Fetch balances (if chain is online)
+    // If chain is offline, don't push it to array
+    try {
+      const gen = await queryTendermint("/genesis", endpoint.tendermint)
+      ep.chainid = gen.genesis.chain_id
+        
+      if (chainid_mapping[ep.chainid] === undefined) {
+        // So we cache how to posttx IBC transfers from this chain, if necessary
+        chainid_mapping[ep.chainid] = {
+          tendermint: endpoint.tendermint,
+          rest: endpoint.rest
+        }
+      }
+        
+      const status = await queryTendermint("/status", endpoint.tendermint)
+      const auth = await queryRest("/auth/accounts/" + address, endpoint.rest)
+      const bal = await queryRest("/bank/balances/" + address, endpoint.rest)
+      
+      ep.blocktime = Date.parse(status.sync_info.latest_block_time)
+      ep.blockheight = parseInt(status.sync_info.latest_block_height)
+      ep.account = auth.value.account_number === undefined ? -1 : parseInt(auth.value.account_number)
+      ep.sequence = auth.value.sequence === undefined ? 0 : parseInt(auth.value.sequence)
+        
+      if (endpoint.incoming !== undefined) {
+        ep.backingBalance = bal.reduce((acc, b) => {
+        console.log(b.denom + " " + ep.backingThere + " " + ep.backingRatio)
+          if (b.denom === ep.backingThere) {
+            const coin = convertCoin(b, ep.backingRatio)
+            acc = coin.amount
+          }
+          return acc
+        }, 0)
+      }
+      
+      if (endpoint.outgoing !== undefined) {
+        ep.tickBalance = bal.reduce((acc, b) => {
+          if (b.denom === ep.tickThere) {
+            const coin = convertCoin(b, "1e6")
+            acc = coin.amount
+          }
+          return acc
+        }, 0)
+      }
+        
+      endpoints.push(ep)
+    } catch (err) {
+      // no error, just not online so don't push
+    }
+  }
+  
+  return endpoints
 }
