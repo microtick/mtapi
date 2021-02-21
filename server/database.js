@@ -45,7 +45,7 @@ const DB = {
     this.chainid = chainid
     
     await mongo_reconnect(this.url)
-    db = mongo.db("mtapi-v2-" + this.chainid)
+    db = mongo.db(this.chainid)
     
     const maxHeight = await db.collection('blocks').findOne({},{sort:[['height',-1]]})
     if (maxHeight !== null) {
@@ -181,7 +181,7 @@ const DB = {
     if (do_mongo_reconnect) {
       do_mongo_reconnect = false
       await mongo_reconnect(this.url)
-      db = mongo.db("mtapi-v2-" + this.chainid)
+      db = mongo.db(this.chainid)
     }
     // HACK
     

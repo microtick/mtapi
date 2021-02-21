@@ -12,6 +12,7 @@ class MTAPI {
     
   constructor() {
     this.sequenceMutex = new Mutex()
+    this.mutexCount = 0
     
     this.subscriptions = {}
     this.blockHandlers = []
@@ -141,7 +142,9 @@ class MTAPI {
   async _handleEvent(env, msg) {
     // Async events passed from the server to us
     if (msg.type === 'block') {
-      delete this.auth
+      if (this.mutexCount === 0) {
+        delete this.auth
+      }
       for (var i=0; i<this.blockHandlers.length; i++) {
         const handler = this.blockHandlers[i] 
         await handler(msg.payload)
@@ -399,7 +402,9 @@ class MTAPI {
     if (auth === undefined) {
       // For simultaneous tx requests, we use a mutex so the resulting
       // sequence numbers will be sequential
+      this.mutexCount++
       await this.sequenceMutex.runExclusive(async () => {
+        this.mutexCount--
         // if we don't have this.auth, fetch it
         if (this.auth === undefined) {
           // get account auth
