@@ -586,7 +586,6 @@ class MTAPI {
       throw new Error("Couldn't communicate with server")
     }
     var rev = response.info.chainid.match(/^.+[^-]-{1}([1-9][0-9]*)$/)
-    console.log(JSON.stringify(rev, null, 2))
     if (rev === null) {
       rev = undefined
     } else {
