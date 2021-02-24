@@ -519,7 +519,7 @@ const processBlock = async (height) => {
                   const proposal = codec.decode(msg.type_url.slice(1), Buffer.from(msg.value, 'base64'), true)
                   switch (proposal.content["@type"]) {
                     case '/' + PROTOBUF_MICROTICK_PACKAGE + '.DenomChangeProposal':
-                      console.log("Denom change: " + proposal.content.extDenom + " ratio: " + proposal.content.extPerInt)
+                      console.log("Denom change: " + proposal.content.backingDenom + " ratio: " + proposal.content.backingRatio)
                       break
                     case '/' + PROTOBUF_MICROTICK_PACKAGE + '.AddMarketsProposal':
                       proposal.content.markets.map(async m => {

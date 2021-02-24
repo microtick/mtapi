@@ -579,6 +579,21 @@ class MTAPI {
   }
   
   async IBCDeposit(channel, height, blocktime, sender, receiver, amount, denom, auth) {
+    const response = await this.protocol.newMessage('getauthinfo', {
+      acct: this.signer.address
+    })
+    if (!response.status) {
+      throw new Error("Couldn't communicate with server")
+    }
+    var rev = response.info.chainid.match(/^.+[^-]-{1}([1-9][0-9]*)$/)
+    console.log(JSON.stringify(rev, null, 2))
+    if (rev === null) {
+      rev = undefined
+    } else {
+      rev = rev[1]
+    }
+    //console.log("Dest Chain ID: " + response.info.chainid)
+    //console.log("Revision: " + JSON.stringify(rev))
     const payload = {
       source_port: "transfer",
       source_channel: channel,
@@ -589,6 +604,7 @@ class MTAPI {
       sender: sender,
       receiver: receiver,
       timeout_height: {
+        revision_number: rev,
         revision_height: '' + height
       },
       timeout_timestamp: '' + blocktime + "000000"
@@ -597,7 +613,15 @@ class MTAPI {
     return await this.signAndBroadcast(factory, payload, auth)
   }
   
-  async IBCWithdrawal(channel, height, blocktime, sender, receiver, amount, denom) {
+  async IBCWithdrawal(chainid, channel, height, blocktime, sender, receiver, amount, denom) {
+    var rev = chainid.match(/^.+[^-]-{1}([1-9][0-9]*)$/)
+    if (rev === null) {
+      rev = undefined
+    } else {
+      rev = rev[1]
+    }
+    //console.log("Dest Chain ID: " + chainid)
+    //console.log("Revision: " + JSON.stringify(rev))
     const payload = {
       source_port: "transfer",
       source_channel: channel,
@@ -608,6 +632,7 @@ class MTAPI {
       sender: sender,
       receiver: receiver,
       timeout_height: {
+        revision_number: rev,
         revision_height: '' + height
       },
       timeout_timestamp: '' + blocktime + "000000"
