@@ -391,7 +391,7 @@ const processBlock = async (height) => {
   // handle genesis markets and accounts -> DB
   if (USE_DATABASE && height === 1) {
     globals.genesis.app_state.microtick.markets.map(async m => {
-      await db.insertMarket(m)
+      await db.insertMarket(m.name, m.description)
     })
     globals.genesis.app_state.bank.balances.map(a => {
       a.coins.map(async c => {
