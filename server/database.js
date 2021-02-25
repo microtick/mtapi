@@ -57,16 +57,20 @@ const DB = {
       }
     }
     
-    await db.createCollection('meta')
-    await db.createCollection('blocks')
-    await db.createCollection('txs')
-    await db.createCollection('balances')
-    await db.createCollection('ledger')
-    await db.createCollection('markets')
-    await db.createCollection('ticks')
-    await db.createCollection('quotes')
-    await db.createCollection('books')
-    await db.createCollection('trades')
+    try {
+      await db.createCollection('meta')
+      await db.createCollection('blocks')
+      await db.createCollection('txs')
+      await db.createCollection('balances')
+      await db.createCollection('ledger')
+      await db.createCollection('markets')
+      await db.createCollection('ticks')
+      await db.createCollection('quotes')
+      await db.createCollection('books')
+      await db.createCollection('trades')
+    } catch (err) {
+      return
+    }
     
     const hasBlockIndex = await db.collection('blocks').indexExists('history')
     if (!hasBlockIndex) {
