@@ -26,7 +26,7 @@ const LOG_TRANSFERS = false
 
 var chainid_mapping = {}
 var chainid = null
- 
+
 if (USE_DATABASE) {
   var db = require('./database.js')
 }
@@ -415,6 +415,15 @@ const processBlock = async (height) => {
   const hashes = Object.keys(pending)
   console.log("Block " + block.height + ": txs=" + num_txs + " pending=" + hashes.length)
   
+  // Handle pending timeouts
+  for (var i=0; i<hashes.length; i++) {
+    const hash = hashes[i]
+    if (pending[hash].timedout) {
+      console.log("  Timeout: " + hash)
+      delete pending[hash]
+    }
+  }
+  
   if (!syncing) {
     this.latestBlock = {
       height: block.height,
@@ -430,7 +439,7 @@ const processBlock = async (height) => {
   
   if (num_txs > 0) {
     const txs = block.block.data.txs
-    for (var i=0; i<txs.length; i++) {
+    for (i=0; i<txs.length; i++) {
       //console.log("TX #" + i)
       const txb64 = txs[i]
       var hash = crypto.createHash('sha256').update(Buffer.from(txb64, 'base64')).digest('hex').toUpperCase()
@@ -1503,7 +1512,6 @@ const handleMessage = async (env, name, payload) => {
                         reject(err)
                       },
                       timedout: false,
-                      tries: 0
                     }
                     setTimeout(() => {obj.timedout = true}, TXTIMEOUT)
                     pending[res.data.result.hash] = obj
