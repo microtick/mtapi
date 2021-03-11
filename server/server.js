@@ -139,8 +139,14 @@ const connect = async () => {
       tmclient.close()
       return
     }
-    if (obj.result.data !== undefined) {
-      handleNewBlock(obj)
+    if (!processing && obj.result.data !== undefined) {
+      processing = true
+      try {
+        handleNewBlock(obj)
+      } catch (err) {
+        console.log("Error processing block: " + err.message)
+      }
+      processing = false
     }
   })
 
@@ -341,10 +347,7 @@ const updateAccountBalance = async (height, hash, acct, denom, amount) => {
 
 var txlog
 const handleNewBlock = async obj => {
-  if (processing) return
   if (syncing) return
-
-  processing = true
 
   txlog = "Transfers:"
   
@@ -382,8 +385,6 @@ const handleNewBlock = async obj => {
   if (LOG_TRANSFERS) {
     console.log(txlog)
   }
-    
-  processing = false
 }
 
 const processBlock = async (height) => {
@@ -1089,6 +1090,7 @@ const apiProtocol = new protocol(10000, async (env, name, payload) => {
 })
 
 const handleMessage = async (env, name, payload) => {
+  if (syncing) return { status: false }
   if (name !== "posttx") {
     var hash = objecthash({
       name: name,
@@ -1598,14 +1600,14 @@ const collectIBCEndpoints = async pubkey => {
       ep.incoming = endpoint.incoming
       const denoms = endpoint.incoming_denom.split(":")
       const ratio = endpoint.incoming_ratio.split(":")
-      ep.backingHere = "ibc/" + sha256("transfer/" + endpoint.incoming + "/" + denoms[0]).toUpperCase()
+      ep.backingHere = "ibc/" + sha256("transfer/" + endpoint.outgoing + "/" + denoms[0]).toUpperCase()
       ep.backingThere = denoms[0]
       ep.backingRatio = parseInt(ratio[0]) / parseInt(ratio[1])
     }
     
     if (endpoint.outgoing !== undefined) {
       ep.outgoing = endpoint.outgoing
-      ep.tickThere = "ibc/" + sha256("transfer/" + endpoint.outgoing + "/stake").toUpperCase()
+      ep.tickThere = "ibc/" + sha256("transfer/" + endpoint.incoming + "/stake").toUpperCase()
     }
     
     // Fetch balances (if chain is online)
@@ -1658,5 +1660,6 @@ const collectIBCEndpoints = async pubkey => {
     }
   }
   
+  //console.log(JSON.stringify(endpoints, null, 2))
   return endpoints
 }
