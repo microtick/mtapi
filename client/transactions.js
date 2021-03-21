@@ -17,7 +17,7 @@ export class TxFactory {
     if (gas !== undefined) {
       this.gas = "" + gas
     } else {
-      this.gas = "500000"
+      this.gas = "2000000"
     }
   }
   
