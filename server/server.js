@@ -338,6 +338,7 @@ const updateAccountBalance = async (height, hash, acct, denom, amount) => {
   }
   if (!globals.account_cache[acct].module) {
     sendAccountEvent(globals.account_cache[acct].name, amount > 0 ? "deposit": "withdraw", {
+      height: height,
       hash: hash,
       amount: amount >= 0 ? amount : -1 * amount,
       denom: denom
@@ -784,7 +785,9 @@ const processMicrotickTx = async (block, txstruct) => {
           item.spot, item.backing, item.ask, item.bid, item.commission, item.reward, item.adjustment)
       }
       sendAccountEvent(item.provider, "create", {
+        height: txstruct.height,
         hash: item.hash,
+        time: item.time,
         quote: item.id,
         commission: item.commission,
         reward: item.reward,
@@ -798,7 +801,9 @@ const processMicrotickTx = async (block, txstruct) => {
           item.commission, item.reward, item.adjustment)
       }
       sendAccountEvent(item.requester, "update", {
+        height: txstruct.height,
         hash: item.hash,
+        time: item.time,
         quote: item.id,
         commission: item.commission,
         reward: item.reward,
@@ -807,6 +812,8 @@ const processMicrotickTx = async (block, txstruct) => {
     }
     
     if (item.type === "trade" || item.type === "pick") {
+      const participants = {}
+      participants[item.taker] = true
       item.trade.legs.map(leg => {
         if (USE_DATABASE) {
           db.insertTrade(txstruct.height, item.trade.id, leg.legId, item.hash, item.market, item.duration,
@@ -819,45 +826,45 @@ const processMicrotickTx = async (block, txstruct) => {
               item.commission, item.reward, 1)
           }
         }
-        sendAccountEvent(item.taker, "taker", {
+        sendAccountEvent(leg.long, "trade", {
+          height: txstruct.height,
           hash: item.hash,
-          trade: item.trade.id,
-          leg: leg.legId,
-          commission: item.commission,
-          reward: item.reward
+          time: item.time,
+          id: item.trade.id,
+          leg: leg.legId
         })
-        if (leg.long === item.taker) {
-          sendAccountEvent(leg.short, "maker", {
-            hash: item.hash,
-            trade: item.trade.id,
-            leg: leg.legId,
-            quote: leg.quoteId
-          })
-        } else {
-          sendAccountEvent(leg.long, "maker", {
-            hash: item.hash,
-            trade: item.trade.id,
-            leg: leg.legId,
-            quote: leg.quoteId
-          })
-        }
+        sendAccountEvent(leg.short, "trade", {
+          height: txstruct.height,
+          hash: item.hash,
+          time: item.time,
+          id: item.trade.id,
+          leg: leg.legId
+        })
       })
     }
     
     if (item.type === "settle") {
       item.legs.map(leg => {
         if (USE_DATABASE) {
-          db.settleTrade(item.id, leg.legId, item.settleConsensus, leg.settle, leg.refund)
+          db.settleTrade(txstruct.height, item.id, leg.legId, item.settleConsensus, leg.settle, leg.refund)
         }
         sendAccountEvent(leg.settleAccount, "settle", {
+          height: txstruct.height,
           hash: item.hash,
-          trade: item.id,
-          leg: leg.legId
+          time: item.time,
+          id: item.id,
+          leg_id: leg.legId,
+          final: item.settleConsensus,
+          amount: leg.settle
         })
         sendAccountEvent(leg.refundAccount, "refund", {
+          height: txstruct.height,
           hash: item.hash,
-          trade: item.id,
-          leg: leg.legId
+          time: item.time,
+          id: item.id,
+          leg_id: leg.legId,
+          final: item.settleConsensus,
+          amount: leg.refund
         })
       })
     }
@@ -868,7 +875,9 @@ const processMicrotickTx = async (block, txstruct) => {
           item.reward, item.adjustment)
       }
       sendAccountEvent(item.requester, "update", {
+        height: txstruct.height,
         hash: item.hash,
+        time: item.time,
         quote: item.id,
         commission: item.commission,
         reward: item.reward,
@@ -882,7 +891,9 @@ const processMicrotickTx = async (block, txstruct) => {
           0, 0)
       }
       sendAccountEvent(item.requester, "update", {
+        height: txstruct.height,
         hash: item.hash,
+        time: item.time,
         quote: item.id,
         commission: item.commission
       })
@@ -893,7 +904,9 @@ const processMicrotickTx = async (block, txstruct) => {
         db.removeQuote(txstruct.height, item.hash, item.id, "cancel", item.commission)
       }
       sendAccountEvent(item.account, "cancel", {
+        height: txstruct.height,
         hash: item.hash,
+        time: item.time,
         id: item.id,
         commission: item.commission
       })
@@ -1268,6 +1281,7 @@ const handleMessage = async (env, name, payload) => {
             quantity: parseFloat(q.quantity.amount)
           }
         }
+        if (res.sum_backing === undefined) break
         returnObj = {
           status: true,
           info: {
@@ -1375,8 +1389,7 @@ const handleMessage = async (env, name, payload) => {
           }
         }
         break
-        
-      /*
+        /*
       case 'gethistquote':
         if (USE_DATABASE) {
           res = await db.queryHistQuote(payload.id, payload.startBlock, payload.endBlock)
@@ -1388,10 +1401,10 @@ const handleMessage = async (env, name, payload) => {
           throw new Error("Database turned off")
         }
         break
-      case 'gethisttrade':
+        */
+      case 'gettradeleg':
         if (USE_DATABASE) {
-          res = await db.queryHistTrade(payload.id)
-          res.curheight = curheight
+          res = await db.queryTradeLeg(payload.id, payload.leg)
           returnObj = {
             status: true,
             info: res
@@ -1400,6 +1413,7 @@ const handleMessage = async (env, name, payload) => {
           throw new Error("Database turned off")
         }
         break
+        /*
       case 'accountledgersize':
         if (USE_DATABASE) {
           res = await db.queryAccountTotalEvents(env.acct)
@@ -1425,17 +1439,12 @@ const handleMessage = async (env, name, payload) => {
         }
         break
         */
-      case 'accountsync':
+      case 'gethisttrades':
         if (USE_DATABASE) {
-          console.log("Sync requested: " + env.acct + " " + payload.startblock + ":" + payload.endblock)
-          /*
-          res = await db.queryAccountHistory(env.acct, payload.startblock, payload.endblock)
-          res.map(ev => {
-            sendAccountEvent(env.acct, ev.type, ev.data)
-          })
-          */
+          res = await db.queryTradeHistory(env.acct, payload.market, payload.duration, payload.startblock, payload.endblock)
           returnObj = {
-            status: true
+            status: true,
+            history: res
           }
         } else {
           throw new Error("Database turned off")
@@ -1567,6 +1576,7 @@ const handleMessage = async (env, name, payload) => {
         console.error(err)
       } else {
         console.error("API error: " + name + ": " + err.message)
+        console.log(err.stack)
       }
     }
     return {

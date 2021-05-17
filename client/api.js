@@ -262,7 +262,7 @@ class MTAPI {
       market: market
     })
     if (!response.status) {
-      throw new Error("Get market info: " + response.error)
+      throw new Error("Get market info: (" + market + "): " + response.error)
     }
     return response.info
   }
@@ -272,7 +272,7 @@ class MTAPI {
       market: market
     })
     if (!response.status) {
-      throw new Error("Get market spot: " + response.error)
+      throw new Error("Get market spot (" + market + "): " + response.error)
     }
     return response.info
   }
@@ -321,12 +321,13 @@ class MTAPI {
     return false
   }
   
-  async getLiveTrade(id) {
-    const response = await this.protocol.newMessage('getlivetrade', {
-      id: id
+  async getTradeLeg(id, leg) {
+    const response = await this.protocol.newMessage('gettradeleg', {
+      id: id,
+      leg: leg
     })
     if (!response.status) {
-      throw new Error("Get live trade: " + response.error)
+      throw new Error("Get trade leg: " + response.error)
     }
     return response.info
   }
@@ -343,18 +344,10 @@ class MTAPI {
     return response.info
   }
   
-  async getHistoricalTrade(id) {
-    const response = await this.protocol.newMessage('gethisttrade', {
-      id: id
-    })
-    if (!response.status) {
-      throw new Error("Get historical trade: " + response.error)
-    }
-    return response.info
-  }
-  
-  async accountSync(startblock, endblock) {
-    const response = await this.protocol.newMessage('accountsync', {
+  async getHistoricalTrades(market, duration, startblock, endblock) {
+    const response = await this.protocol.newMessage('gethisttrades', {
+      market: market,
+      duration: duration,
       startblock: startblock,
       endblock: endblock
     })

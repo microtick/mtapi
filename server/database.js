@@ -329,7 +329,7 @@ const DB = {
       commission: commission
     })
   },
-  
+   
   insertTrade: async (height, id, legid, hash, market, duration, type, strike, start, expiration, 
     premium, quantity, cost, backing, long, short) => {
     await db.collection('trades').insertOne({
@@ -353,12 +353,13 @@ const DB = {
     })
   },
   
-  settleTrade: async (id, legid, settleConsensus, settleAmount, refundAmount) => {
+  settleTrade: async (height, id, legid, settleConsensus, settleAmount, refundAmount) => {
     await db.collection('trades').updateOne({
       id: id,
       leg: legid
     }, {
       $set: {
+        settleBlock: height,
         settle: settleConsensus,
         payout: settleAmount,
         refund: refundAmount,
@@ -498,29 +499,24 @@ const DB = {
     return res
   },
 
-  queryAccountHistory: async (acct, startblock, endblock, target) => {
+  queryTradeHistory: async (acct, market, dur, startblock, endblock) => {
     //console.log("account=" + acct)
     //console.log("startblock=" + startblock)
     //console.log("endblock=" + endblock)
-    const curs = await db.collection('ledger').aggregate([
-      {
-        $match: {
-          $and: [
-            { account: acct },
-            { height: { $gte: startblock }},
-            { height: { $lte: endblock }}
-          ]
-        }
-      },
-      {
-        $lookup: {
-          from: 'blocks',
-          localField: 'height',
-          foreignField: 'height',
-          as: 'time'
-        }
-      }
-    ])
+    const curs = await db.collection('trades').find({
+      $and: [
+        { market: market },
+        { duration: dur },
+        { $or: [
+          { long: acct },
+          { short: acct }
+        ]},
+        { height: { $lte: endblock }},
+        { $or: [
+          { active: true },
+          { settleBlock: { $gte: startblock }}
+        ]}
+    ]})
     return await curs.toArray()
   },
   
@@ -696,123 +692,9 @@ const DB = {
     return obj
   },
   
-  queryHistTrade: async id => {
-    var curs = await db.collection('trades').find({id:id})
-    const events = await curs.toArray()
-    const start = events[0]
-    const end = events[1]
-    const endblock = end !== undefined ? end.height : -1
-    const data = {
-      startBlock: start.height,
-      start: Date.parse(start.data.time),
-      endBlock: endblock,
-      end: end !== undefined ? Date.parse(end.data.time) : -1,
-      state: end !== undefined ? "settled" : "active",
-      trade: {
-        market: start.data.trade.market,
-        duration: start.data.trade.duration,
-        type: start.data.trade.type,
-        long: start.data.trade.long,
-        counterparties: start.data.trade.counterparties.map(cp => {
-          return {
-            backing: parseFloat(cp.backing.amount),
-            premium: parseFloat(cp.premium.amount),
-            quantity: parseFloat(cp.quantity.amount),
-            final: cp.final,
-            short: cp.short,
-            quoted: {
-              id: cp.quoted.id,
-              premium: parseFloat(cp.quoted.premium.amount),
-              quantity: parseFloat(cp.quoted.quantity.amount),
-              spot: parseFloat(cp.quoted.spot.amount)
-            },
-            balance: start.data.balance[cp.short]
-          }
-        }),
-        backing: parseFloat(start.data.trade.backing.amount),
-        cost: parseFloat(start.data.trade.cost.amount),
-        quantity: parseFloat(start.data.trade.quantity.amount),
-        start: start.data.trade.start,
-        expiration: start.data.trade.expiration,
-        strike: parseFloat(start.data.trade.strike.amount),
-        commission: parseFloat(start.data.trade.commission.amount),
-        settleIncentive: parseFloat(start.data.trade.settleIncentive.amount),
-        balance: start.data.balance[start.data.trade.long]
-      }
-    }
-    if (end !== undefined) {
-      data.trade.final = parseFloat(end.data.final.amount)
-      data.trade.settle = parseFloat(end.data.settle.amount)
-      for (var i=0; i<data.trade.counterparties.length; i++) {
-        data.trade.counterparties[i].settle = parseFloat(end.data.counterparties[i].settle.amount)
-        data.trade.counterparties[i].refund = parseFloat(end.data.counterparties[i].refund.amount)
-      }
-    }
-    // Query for last tick
-    curs = await db.collection('ticks').aggregate([
-      {
-        $match: {
-          $and: [
-            { market: data.trade.market },
-            { height: { $lte: data.startBlock }},
-          ]
-        }
-      },
-      {
-        $sort: { height: -1 }
-      },
-      { $limit: 1 }
-    ])
-    const lastTick = await curs.toArray()
-    data.ticks = [
-      {
-        height: data.startBlock,
-        consensus: lastTick[0].consensus,
-        time: data.start,
-      }
-    ]
-    var tickEnd = data.endBlock
-    if (tickEnd === -1) { 
-      curs = await db.collection('meta').find({ id: 1 })
-      if (await curs.hasNext()) {
-        const doc = await curs.next()
-        tickEnd = doc.syncHeight
-      } 
-    }
-    curs = await db.collection('ticks').aggregate([
-      {
-        $match: {
-          $and: [
-            { market: data.trade.market },
-            { height: { $gte: data.startBlock }},
-            { height: { $lte: tickEnd }}
-          ]
-        }
-      },
-      {
-        $lookup: {
-          from: 'blocks',
-          localField: 'height',
-          foreignField: 'height',
-          as: 'time'
-        }
-      }
-    ])
-    const ticks = await curs.toArray()
-    ticks.reduce((acc, el) => {
-      acc.push({
-        height: el.height,
-        consensus: el.consensus,
-        time: el.time[0].time
-      })
-      return acc
-    }, data.ticks)
-    data.ticks.push({
-      height: tickEnd,
-      consensus: data.ticks[data.ticks.length-1].consensus,
-      time: data.end === -1 ? Date.now() : data.end
-    })
-    return data
+  queryTradeLeg: async (id, leg) => {
+    var curs = await db.collection('trades').find({id:id, leg:leg})
+    return curs.next()
   }
   
 }
