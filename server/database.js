@@ -498,6 +498,19 @@ const DB = {
     //console.log("reduced=" + res.length)
     return res
   },
+  
+  queryActiveTrades: async acct => {
+    const curs = await db.collection('trades').find({
+      $and: [
+        { active: true},
+        { $or: [
+          { long: acct },
+          { short: acct}
+        ]}
+      ]
+    })
+    return await curs.toArray()
+  },
 
   queryTradeHistory: async (acct, market, dur, startblock, endblock) => {
     //console.log("account=" + acct)
@@ -516,7 +529,8 @@ const DB = {
           { active: true },
           { settleBlock: { $gte: startblock }}
         ]}
-    ]})
+      ]
+    })
     return await curs.toArray()
   },
   

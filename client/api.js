@@ -200,19 +200,21 @@ class MTAPI {
   }
   
   async subscribe(key) {
-    const response = await this.protocol.newMessage('subscribe', {
-      key: key
-    })
-    if (!response.status) {
-      throw new Error("Subscription: " + response.error)
-    }
     if (this.subscriptions[key] === undefined) {
       this.subscriptions[key] = 0
+      const response = await this.protocol.newMessage('subscribe', {
+        key: key
+      })
+      if (!response.status) {
+        throw new Error("Subscription: " + response.error)
+      }
     }
     this.subscriptions[key]++
+    console.log("Subscribe: " + key + " count=" + this.subscriptions[key])
   }
   
   async unsubscribe(key) {
+    console.log("Unsubscribe: " + key + " count (prior)=" + this.subscriptions[key])
     if (this.subscriptions[key] === undefined) return
     this.subscriptions[key]--
     if (this.subscriptions[key] <= 0) {
@@ -344,6 +346,14 @@ class MTAPI {
     return response.info
   }
   
+  async getActiveTrades() {
+    const response = await this.protocol.newMessage('getactivetrades')
+    if (!response.status) {
+      throw new Error("Get active trades: " + response.error)
+    }
+    return response.active
+  }
+  
   async getHistoricalTrades(market, duration, startblock, endblock) {
     const response = await this.protocol.newMessage('gethisttrades', {
       market: market,
@@ -352,7 +362,7 @@ class MTAPI {
       endblock: endblock
     })
     if (!response.status) {
-      throw new Error("Account sync: " + response.error)
+      throw new Error("Get historical trades: " + response.error)
     }
     return response.history
   }

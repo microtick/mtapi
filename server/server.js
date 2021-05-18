@@ -333,7 +333,7 @@ const updateAccountBalance = async (height, hash, acct, denom, amount) => {
         hash = globals.account_cache[lookup].name
       }
     }
-    db.updateAccountBalance(height, hash, globals.account_cache[acct].name, denom, amount, 
+    await await db.updateAccountBalance(height, hash, globals.account_cache[acct].name, denom, amount, 
       !globals.account_cache[acct].module)
   }
   if (!globals.account_cache[acct].module) {
@@ -381,7 +381,8 @@ const handleNewBlock = async obj => {
     accounts: {}
   }
   
-  await processBlock(chainHeight)
+  // Do not wait in case multiple blocks in parallel
+  processBlock(chainHeight)
   
   if (LOG_TRANSFERS) {
     console.log(txlog)
@@ -769,7 +770,7 @@ const processMicrotickTx = async (block, txstruct) => {
     if (item.consensus !== undefined) {
       // add tick
       if (USE_DATABASE) {
-        db.insertTick(txstruct.height, item.time, item.market, item.consensus)
+        await db.insertTick(txstruct.height, item.time, item.market, item.consensus)
       }
       broadcastTick(item.market, {
         height: txstruct.height,
@@ -781,7 +782,7 @@ const processMicrotickTx = async (block, txstruct) => {
     
     if (item.type === "create") {
       if (USE_DATABASE) {
-        db.insertQuote(txstruct.height, item.id, item.hash, item.provider, item.market, item.duration,
+        await db.insertQuote(txstruct.height, item.id, item.hash, item.provider, item.market, item.duration,
           item.spot, item.backing, item.ask, item.bid, item.commission, item.reward, item.adjustment)
       }
       sendAccountEvent(item.provider, "create", {
@@ -797,7 +798,7 @@ const processMicrotickTx = async (block, txstruct) => {
     
     if (item.type === "update") {
       if (USE_DATABASE) {
-        db.updateQuoteParams(txstruct.height, item.id, item.hash, item.spot, item.ask, item.bid, 
+        await db.updateQuoteParams(txstruct.height, item.id, item.hash, item.spot, item.ask, item.bid, 
           item.commission, item.reward, item.adjustment)
       }
       sendAccountEvent(item.requester, "update", {
@@ -814,15 +815,15 @@ const processMicrotickTx = async (block, txstruct) => {
     if (item.type === "trade" || item.type === "pick") {
       const participants = {}
       participants[item.taker] = true
-      item.trade.legs.map(leg => {
+      item.trade.legs.map(async leg => {
         if (USE_DATABASE) {
-          db.insertTrade(txstruct.height, item.trade.id, leg.legId, item.hash, item.market, item.duration,
+          await db.insertTrade(txstruct.height, item.trade.id, leg.legId, item.hash, item.market, item.duration,
             leg.type, item.trade.strike, item.trade.start, item.trade.expiration, leg.premium, leg.quantity,
             leg.cost, leg.backing, leg.long, leg.short)
           if (leg.final) {
-            db.removeQuote(txstruct.height, item.hash, leg.quoteId, item.type, 0)
+            await db.removeQuote(txstruct.height, item.hash, leg.quoteId, item.type, 0)
           } else {
-            db.updateQuoteBacking(txstruct.height, leg.quoteId, item.hash, leg.remainBacking, item.type, 
+            await db.updateQuoteBacking(txstruct.height, leg.quoteId, item.hash, leg.remainBacking, item.type, 
               item.commission, item.reward, 1)
           }
         }
@@ -844,9 +845,9 @@ const processMicrotickTx = async (block, txstruct) => {
     }
     
     if (item.type === "settle") {
-      item.legs.map(leg => {
+      item.legs.map(async leg => {
         if (USE_DATABASE) {
-          db.settleTrade(txstruct.height, item.id, leg.legId, item.settleConsensus, leg.settle, leg.refund)
+          await db.settleTrade(txstruct.height, item.id, leg.legId, item.settleConsensus, leg.settle, leg.refund)
         }
         sendAccountEvent(leg.settleAccount, "settle", {
           height: txstruct.height,
@@ -871,7 +872,7 @@ const processMicrotickTx = async (block, txstruct) => {
     
     if (item.type === "deposit") {
       if (USE_DATABASE) {
-        db.updateQuoteBacking(txstruct.height, item.id, item.hash, item.backing, item.type, item.commission,
+        await db.updateQuoteBacking(txstruct.height, item.id, item.hash, item.backing, item.type, item.commission,
           item.reward, item.adjustment)
       }
       sendAccountEvent(item.requester, "update", {
@@ -887,7 +888,7 @@ const processMicrotickTx = async (block, txstruct) => {
     
     if (item.type === "withdraw") {
       if (USE_DATABASE) {
-        db.updateQuoteBacking(txstruct.height, item.id, item.hash, item.backing, item.type, item.commission,
+        await db.updateQuoteBacking(txstruct.height, item.id, item.hash, item.backing, item.type, item.commission,
           0, 0)
       }
       sendAccountEvent(item.requester, "update", {
@@ -901,7 +902,7 @@ const processMicrotickTx = async (block, txstruct) => {
     
     if (item.type === "cancel") {
       if (USE_DATABASE) {
-        db.removeQuote(txstruct.height, item.hash, item.id, "cancel", item.commission)
+        await db.removeQuote(txstruct.height, item.hash, item.id, "cancel", item.commission)
       }
       sendAccountEvent(item.account, "cancel", {
         height: txstruct.height,
@@ -1439,6 +1440,17 @@ const handleMessage = async (env, name, payload) => {
         }
         break
         */
+      case 'getactivetrades':
+        if (USE_DATABASE) {
+          res = await db.queryActiveTrades(env.acct)
+          returnObj = {
+            status: true,
+            active: res
+          }
+        } else {
+          throw new Error("Database turned off")
+        }
+        break
       case 'gethisttrades':
         if (USE_DATABASE) {
           res = await db.queryTradeHistory(env.acct, payload.market, payload.duration, payload.startblock, payload.endblock)
