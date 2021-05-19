@@ -202,6 +202,8 @@ class MTAPI {
   async subscribe(key) {
     if (this.subscriptions[key] === undefined) {
       this.subscriptions[key] = 0
+    }
+    if (this.subscriptions[key] === 0) {
       const response = await this.protocol.newMessage('subscribe', {
         key: key
       })
@@ -214,7 +216,7 @@ class MTAPI {
   }
   
   async unsubscribe(key) {
-    console.log("Unsubscribe: " + key + " count (prior)=" + this.subscriptions[key])
+    //console.log("Unsubscribe: " + key + " count (prior)=" + this.subscriptions[key])
     if (this.subscriptions[key] === undefined) return
     this.subscriptions[key]--
     if (this.subscriptions[key] <= 0) {
@@ -321,6 +323,16 @@ class MTAPI {
       return true
     }
     return false
+  }
+  
+  async getLiveTrade(id) {
+    const response = await this.protocol.newMessage('getlivetrade', {
+      id: id
+    })
+    if (!response.status) {
+      throw new Error("Get live trade: " + response.error)
+    }
+    return response.info
   }
   
   async getTradeLeg(id, leg) {
