@@ -236,6 +236,7 @@ const DB = {
     //should be replace one: only one tick per market per height
     await db.collection('ticks').replaceOne({
       height: height,
+      market: market
     }, {
       height: height,
       time: time,
