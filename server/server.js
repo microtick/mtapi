@@ -552,7 +552,6 @@ const processBlock = async (height) => {
         } catch (err) {
           console.error(err)
           console.error("UNKNOWN TX TYPE")
-          process.exit()
         }
       }
     }
@@ -1121,6 +1120,7 @@ const handleMessage = async (env, name, payload) => {
   
   var returnObj
   var res
+  var cacheResponse = true
   try {
     switch (name) {
       case 'connect':
@@ -1186,6 +1186,7 @@ const handleMessage = async (env, name, payload) => {
         }
         break
       case 'getacctinfo':
+        cacheResponse = false
         const acct = payload.acct === undefined ? env.acct : payload.acct
         var url = "/microtick/account/" + acct
         var params = false
@@ -1589,7 +1590,7 @@ const handleMessage = async (env, name, payload) => {
     }
     
     // Save query in cache
-    cache[hash] = returnObj
+    if (cacheResponse) cache[hash] = returnObj
     return returnObj
     
   } catch (err) {
