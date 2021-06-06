@@ -4,3 +4,4 @@ yarn.lock
 config.json
 codec.js
 proto
+server-*

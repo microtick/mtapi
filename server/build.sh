@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-DESTDIR=./proto
+DESTDIR=$HOME/.config/microtick/proto
 CODEC=./codec.js
 
 rm -rf $DESTDIR

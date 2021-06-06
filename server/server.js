@@ -1,4 +1,5 @@
 const fs = require('fs')
+const os = require('os')
 const https = require('https')
 const ws = require('ws')
 const axios = require('axios')
@@ -12,7 +13,8 @@ const BN = require('bignumber.js')
 
 const protocol = require('../lib/protocol.js')
 const codec = require('./codec.js')
-const config = JSON.parse(fs.readFileSync('./config.json'))
+const home = os.homedir()
+const config = JSON.parse(fs.readFileSync(home + '/.config/microtick/mtapi.config'))
 
 // Set to true if you want blocks and events stored in mongo
 const USE_DATABASE = config.use_database 
